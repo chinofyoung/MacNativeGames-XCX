@@ -48,6 +48,8 @@ Early. The game reaches the title screen, character creation and gameplay in Pri
 
 - Characters are drawn and lit, in the field and in battle (the first battle was played).
 - The field and battle HUD and menu text are drawn.
+- Audio plays (the game's Wwise output through Core Audio).
+- The opening cutscene's White Whale renders correctly.
 - Saves write, and Continue loads them.
 - A controller (a DualSense was used) and the Mac keyboard both work.
 - `python3 build_app.py` turns your XCI into a self-contained, double-clickable app with a settings window, in one
@@ -349,12 +351,8 @@ Extra keys:
 
 ## Known issues and what has not been checked
 
-- **Audio** is produced (the game's Wwise output reaches Core Audio with measured, non-silent levels) but has not
-  been listened to.
 - **Not checked yet:** cities (New Los Angeles), Skells, cutscenes, day-time lighting, water, menus beyond character
   creation, and a New Game through character creation with the current build.
-- In the opening cutscene the White Whale is a black silhouette with a rim light. It has not been rechecked since the
-  character fix; it may be correct or a rendering bug.
 - Frame interpolation (key 2): besides its cost on an M1, characters and enemies moving on their own and rain streaks
   ghost in the generated frames, and labels attached to enemies are half a frame ahead. Camera cuts have not been tested.
 - MetalFX spatial upscaling has not been checked with this game and is off in the presets.

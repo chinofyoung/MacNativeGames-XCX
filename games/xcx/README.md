@@ -206,10 +206,9 @@ build").
 
 ## Next
 
-Stage 4 and 5 are in progress; the changelog's Status table is kept current. Not checked yet: listening to the audio,
-cities (New Los Angeles), Skells, cutscenes (the opening's White Whale is a black silhouette, not rechecked), day-time
-lighting, water, menus beyond character creation, and a New Game with the current build. Then: the rest of the online
-SDK's offline answers as the game reaches them, a resolution patch (the settings window has no such setting until it
+Stage 4 and 5 are in progress; the changelog's Status table is kept current. Not checked yet: cities (New Los Angeles),
+Skells, cutscenes, day-time lighting, water, menus beyond character creation, and a New Game with the current
+build. Then: the rest of the online SDK's offline answers as the game reaches them, a resolution patch (the settings window has no such setting until it
 exists), a startup
 shader seed with Metal cache warm-up for the app, and up-front shader translation, which the iPhone / iPad build needs
 to draw.
