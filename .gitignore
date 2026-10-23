@@ -1,8 +1,6 @@
 .DS_Store
 __pycache__/
 *.pyc
-# what players' iPhones / iPads noted for the shared shader list (ios/tools/shader_contrib_watch.py): sent in an issue, not committed
-/shader-list-contribution/
 # never commit keys or game files
 *.keys
 *.xci
@@ -13,19 +11,11 @@ __pycache__/
 *.bfttf
 *.sav
 # build output (the work folder normally lives next to the card image)
-TOTK_build/
 *.app/
-games/totk/.venv
-games/totk/build/
-games/totk/extracted/
-games/totk/rewritten/
-games/totk/analysis/
-games/totk/tooling/
-games/totk/user-data/
-games/totk/tools/totk_xlate/obj/
-games/totk/tools/totk_xlate/bin/
-games/totk/scripts/shader_inventory/obj/
-games/totk/scripts/shader_inventory/bin/
+# the shader translator's .NET build folders (games/xcx/tools/totk_xlate/publish_native.sh builds in a temporary folder;
+# these appear only when the project is built in place)
+games/xcx/tools/totk_xlate/obj/
+games/xcx/tools/totk_xlate/bin/
 # local game folder (XCI, keys, work folders) and screenshots of game imagery
 nsw/
 docs/screenshots/

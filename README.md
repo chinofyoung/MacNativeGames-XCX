@@ -5,7 +5,8 @@ The port lives in [`games/xcx`](games/xcx).
 
 This repository is a fork of [MacNativeGames](https://github.com/ly05010419/MacNativeGames). It builds on that project's
 native ports of Tears of the Kingdom, Breath of the Wild and Bayonetta 3 and on their shared runtime, and is released
-under the same MIT license.
+under the same MIT license. This fork holds only the Xenoblade Chronicles X port; the other games are in the original
+repository.
 
 ## What it is
 
@@ -18,7 +19,8 @@ It is not an emulator. The game's own ARM64 code runs directly on Apple silicon:
 
 No CPU is emulated: there is no interpreter, JIT or dynamic binary translation. The port started from Bayonetta 3's
 port in the original repository, and `games/xcx` keeps its own copy of the runtime, rewriter, graphics layer and scripts.
-Nothing in it reads another game's folder.
+Besides `games/xcx`, the repository holds only the vendored Ryujinx shader translator sources (`vendor/ryujinx`) that
+the prebuilt shader translator is built from.
 
 ## Legal
 
@@ -79,8 +81,7 @@ The full work log, with what was found, what was changed and how each step was c
 
 ## Build and run
 
-The root `build_app.py` builds Tears of the Kingdom and Breath of the Wild only. **It does not build Xenoblade Chronicles
-X.** A one-command build is planned; for now the port is built with the steps below, all run from `games/xcx`.
+There is no one-command build yet. For now the port is built with the steps below, all run from `games/xcx`.
 
 The examples keep the XCI, `prod.keys` and the work folder in `nsw/` at the repository root, which git ignores. Any
 other place works; keep the work folder out of the repository's tracked files.
@@ -141,6 +142,10 @@ make install WORK=$WORK          # optional: copy the app to /Applications or ~/
 `make app` also builds the runtime (`make runtime`) and the shader tools (`make shader-tools`). `GAME` and `KEYS` must be
 absolute paths; they are used only for the app's icon, taken from the game's own data (without them the app has no
 icon). The app is written to `$WORK/Xenoblade Chronicles X.app` and is about 3 MB.
+
+The shader translator comes ready-made (`games/xcx/prebuilt/macos-arm64/totk_xlate`, checked against its SHA-256), so
+the build needs no .NET. Its sources are in `games/xcx/tools/totk_xlate` and `vendor/ryujinx`; see
+[`games/xcx/prebuilt/macos-arm64/README.md`](games/xcx/prebuilt/macos-arm64/README.md) for how to rebuild it.
 
 ### 5. Play
 
@@ -208,7 +213,8 @@ Extra keys:
 
 ## How it works
 
-The general method is described for Tears of the Kingdom in [docs/how-it-works.md](docs/how-it-works.md); the same
+The general method is described for Tears of the Kingdom in the original
+[MacNativeGames](https://github.com/ly05010419/MacNativeGames) repository (`docs/how-it-works.md` there); the same
 architecture applies here. What was changed for this game, and why, is in
 [`games/xcx/CHANGELOG.md`](games/xcx/CHANGELOG.md) and [`games/xcx/README.md`](games/xcx/README.md).
 
@@ -217,7 +223,8 @@ architecture applies here. What was changed for this game, and why, is in
 - **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** (MIT): the runtime, rewriter, graphics layer and
   app this port is built from.
 - **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (MIT) developed this way of running Switch games natively.
-- **Ryujinx** (MIT): its shader translator, compiled ahead of time into `prebuilt/macos-arm64/totk_xlate`.
+- **Ryujinx** (MIT): its shader translator (`vendor/ryujinx`), compiled ahead of time into
+  `games/xcx/prebuilt/macos-arm64/totk_xlate`.
 - **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** (Apache-2.0), fetched at a pinned commit and compiled
   during the build.
 - **libopus** and **libvpx** (BSD) from Homebrew: audio and the game's movies.

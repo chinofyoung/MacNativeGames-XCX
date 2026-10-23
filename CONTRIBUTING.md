@@ -42,11 +42,14 @@ The log's Status table and its newest entries say what is being worked on and wh
 
 ## Repository layout
 
-- Each game lives in `games/<name>/` and carries its own copy of the runtime, graphics layer, rewriter and scripts.
-  Xenoblade Chronicles X is `games/xcx`. A change for one game never edits another game's files, and nothing in
-  `games/xcx` reads another game's folder.
-- Changes to the shared graphics layer that only this game needs sit behind `GAME_XCX` (the Makefile defines it), so
-  the other games build as before.
+- The port is `games/xcx`, with its own copy of the runtime, graphics layer, rewriter and scripts (forked from the
+  original MacNativeGames repository, which keeps the other games). The only other code is `vendor/ryujinx`, the
+  Ryujinx shader translator sources the shader translator is built from.
+- The shader translator ships ready-made in `games/xcx/prebuilt/macos-arm64` (checked against its SHA-256 by
+  `make shader-tools`). Its sources are `games/xcx/tools/totk_xlate` and `vendor/ryujinx`; rebuild it with
+  `games/xcx/tools/totk_xlate/publish_native.sh` (needs the .NET 10 SDK) only when you change them.
+- Changes to the graphics layer that only this game needs sit behind `GAME_XCX` (the Makefile defines it), which keeps
+  them apart from the code inherited from the other games' ports.
 - The NVN layer maps NVN semantics one by one (resources, shaders, state, draws, synchronization, presentation) and
   contains no camera, scene or gameplay decisions. Game-specific handling sits apart, says why it exists, is behind a
   switch, and is never needed for the game to run.
@@ -74,11 +77,13 @@ The log's Status table and its newest entries say what is being worked on and wh
   keys, defaults or verified hashes (`expected-v1.0.1.json`, `game_version.h`) unless that is the point of the pull
   request.
 - **Build what you touched.** `make runtime` builds with `-Werror`; build the app (`make app`) when you change the
-  runtime, the graphics layer or the launcher. If you could not build something, say so.
+  runtime, the graphics layer or the launcher. If you change the shader translator or its patches, commit the rebuilt
+  `totk_xlate` and its `totk_xlate.sha256` together and say how you checked that it translates as before. If you could
+  not build something, say so.
 - **Say how you tested:** built only, or played on a Mac. Name the Mac, and where in the game you were. A build that
   passes does not replace playing the game.
 - **Add an entry to [`games/xcx/CHANGELOG.md`](games/xcx/CHANGELOG.md)** for any change to how the game runs: what was
   found, what was done and why, what went wrong on the way, and how it was checked. "Verified" means a check with a
   recorded result, never "it looked right". Update the Status table when a stage changes.
 - **Diagnostics are off by default,** switched on by an environment variable or an input-file command.
-- **Commit messages:** `<type>: <description>`, with type one of feat, fix, refactor, docs, test, chore, perf, ci.
+- **Commit messages:** `<type>: <description>`, with type one of feat, fix, refactor, docs, test, chore, perf.

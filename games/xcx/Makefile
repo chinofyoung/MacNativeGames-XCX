@@ -1,7 +1,8 @@
 # Xenoblade Chronicles X: Definitive Edition native runtime. Self-contained: the Horizon host (runtime/), the rewriter
 # (third_party/d2r), the NVN-on-Metal layer (third_party/d2r_gfx), the shader translator (prebuilt/) and the scripts are
-# this folder's own copies, forked from games/by3; nothing here reads games/by3 or games/totk. The runtime is retargeted
-# to Xenoblade Chronicles X 1.0.1 (title 0100453019AA8000). Everything generated goes to the work folder.
+# this folder's own copies, forked from the original project's games/by3 (the translator's source: tools/totk_xlate and
+# the repository's vendor/ryujinx). The runtime is retargeted to Xenoblade Chronicles X 1.0.1 (title 0100453019AA8000).
+# Everything generated goes to the work folder.
 # Inputs come from scripts/extract_code.py, scripts/merge_romfs.py and the rewrite (see README.md), then:
 #   make prepare   # scripts/prepare_runtime.py: tables, RomFS index, fonts config
 #   make runtime   # XCX_build/build/xcx-native
@@ -46,7 +47,8 @@ runtime: $(OUT)/xcx-native
 
 # The runtime shader translation the graphics layer starts on first use: <work>/build/shader-service/totk_xlate (the
 # repository's prebuilt NativeAOT translator, checked against its SHA-256) and <work>/build/spirv-cross/spirv-cross,
-# built like build_app.py does (same pinned commit, sources and flags as SPIRV-Cross's CMake Release build).
+# built like the original project's build_app.py did (same pinned commit, sources and flags as SPIRV-Cross's CMake
+# Release build).
 SPIRV_CROSS_COMMIT := aa217aeb6c9f0ace7a0ab233b28807edf45eb165
 SPIRV_CROSS_SOURCES := main.cpp spirv_cfg.cpp spirv_cpp.cpp spirv_cross.cpp spirv_cross_parsed_ir.cpp spirv_cross_util.cpp \
   spirv_glsl.cpp spirv_hlsl.cpp spirv_msl.cpp spirv_parser.cpp spirv_reflect.cpp

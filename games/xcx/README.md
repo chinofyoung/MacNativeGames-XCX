@@ -1,15 +1,16 @@
 # Xenoblade Chronicles X: Definitive Edition (work in progress)
 
-An experiment: run Xenoblade Chronicles X: Definitive Edition natively the way `games/by3` runs Bayonetta 3. It starts
-from that code (rewriter, loader, Horizon host, NVN on Metal) and keeps its own copies of all of it in this folder
-(`runtime/`, `third_party/d2r`, `third_party/d2r_gfx`, `prebuilt/`, `scripts/`), so changes here never affect another
-game and nothing here reads `games/by3` or `games/totk`. **It reaches the title screen, character creation and
+An experiment: run Xenoblade Chronicles X: Definitive Edition natively the way the original MacNativeGames project's
+`games/by3` runs Bayonetta 3. It starts from that code (rewriter, loader, Horizon host, NVN on Metal) and keeps its own
+copies of all of it in this folder (`runtime/`, `third_party/d2r`, `third_party/d2r_gfx`, `prebuilt/`, `tools/`,
+`scripts/`); the other games are not part of this repository. **It reaches the title screen, character creation and
 gameplay in Primordia** (stages 4 and 5, in progress): characters, text and the HUD are drawn, the first battle plays,
 saves write and Continue loads them, a controller and the keyboard work, and `make app` builds a double-clickable app.
 Only those areas have been checked so far (on an M1 MacBook Air, at the game's 30 fps). The stage sections below say
 how each step was reached; the user-facing summary is the repository's [README](../../README.md).
 
-The root `build_app.py` does not build this game; use the steps below.
+There is no one-command build yet; use the steps below. The shader translator in `prebuilt/` is built from
+`tools/totk_xlate` and the repository's `vendor/ryujinx` (see `prebuilt/macos-arm64/README.md`).
 
 How the work was done, what was found and what went wrong on the way: [CHANGELOG.md](CHANGELOG.md).
 
