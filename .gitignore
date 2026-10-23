@@ -26,3 +26,6 @@ games/totk/tools/totk_xlate/obj/
 games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
+# local game folder (XCI, keys, work folders) and screenshots of game imagery
+nsw/
+docs/screenshots/

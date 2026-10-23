@@ -1,0 +1,37 @@
+{
+    "_comment": "Verified Xenoblade Chronicles X: Definitive Edition 1.0.1 code (the update's ExeFS, from the XCI), rewrite bytes and merged RomFS (complete base v0 + BKTR update). Runtime validation is recorded separately.",
+    "title_id": "0100453019AA8000",
+    "update_title_id": "0100453019AA8800",
+    "version": 65536,
+    "display_version": "1.0.1",
+    "main_build_id": "3F2425864CF226844511065F77AA3E36FB5FC33F",
+    "base_program_nca": {
+        "name": "d734f1f952d3f8ca859a0454358359fe.nca",
+        "nca_offset": 385975808,
+        "size": 14382743552
+    },
+    "update_program_nca": {
+        "name": "4e7bdfd67782f0ffd791758053a1accb.nca",
+        "nca_offset": 14769862144,
+        "size": 107456000
+    },
+    "exefs_sha256": {
+        "main": "4421965c277ea12ae22bfef71e2b138e668fcfecaee26d891b6abec31f395697",
+        "main.npdm": "b1a146215247f5d427169311700c9a7bb20a43d14a58c6acc6f8175f62cbd30a",
+        "rtld": "ccc8301636595a6273681568f919435238c1a9f2a31263e991a0d6f11bf16771",
+        "sdk": "0b72afe99b4c2e4ee89ddbf449351aed2036b077536bf01be02f4991c8af22d3",
+        "subsdk0": "24bc0737080524edcb690523ece78a610ca2260dfacff4a8fbeb463d5a0aec97"
+    },
+    "rewritten_sha256": {
+        "main.patched.bin": "c20a5a7056fbc1ec744bfa83600ecf3937d0b28639a58768028e9ba5628d096d",
+        "sdk.patched.bin": "9d629869f383b2966067391a3c3cf2102550274f523c0d550fff7cde1b605680",
+        "subsdk0.patched.bin": "407f783cf6f501131b140ba597897166dc3acac914b80e1b3cb15c1eb12e4907"
+    },
+    "romfs": {
+        "size": 14331516488,
+        "sha256": "12c1bf46b3046da8c2ff8da2eaf3091e0712b3173dd0f6cfa96d9b2c2b1cb22c",
+        "files": 53,
+        "bytes_from_base": 14279799456,
+        "bytes_from_update": 79831976
+    }
+}

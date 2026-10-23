@@ -1,0 +1,14 @@
+# Xenoblade Chronicles X: work folder, player mods (they hold game data) and game data by format, wherever it lands in this folder
+XCX_build/
+/mods/
+/extracted/
+/rewritten/
+/analysis/
+/build/
+/user-data/
+romfs.bin
+*.ard
+*.arh
+*.pck
+*.webm
+*.pchtxt
