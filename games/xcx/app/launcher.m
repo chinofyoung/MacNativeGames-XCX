@@ -5,11 +5,12 @@
    Two kinds of app (scripts/app_bundle.py):
    - self-contained (the root build_app.py): the game folder is inside the app, Contents/Resources/xcx (the binary, the
      rewritten code, the RomFS index and fonts; the RomFS image is the signed data bundle in Contents/Helpers that
-     extracted/v101/romfs/romfs.bin links to). The app can be moved anywhere. Everything the game writes goes to the
+     extracted/<v>/romfs/romfs.bin links to). The app can be moved anywhere. Everything the game writes goes to the
      user's Library, so the signed bundle stays read-only: the shader cache to Application Support/MacNativeGames/XCX/
      shader-cache/rt-<chain> (as Tears of the Kingdom's app), the RomFS check record to .../XCX/app-romfs-record.
    - development (`make app`): a small bundle; the game's data stay in the work folder (XCX_build) named by
-     Info.plist's XCXWorkFolder (or XCX_WORK), so nothing large is copied.
+     Info.plist's XCXWorkFolder (or XCX_WORK), so nothing large is copied; it runs build/xcx-native-<v>.
+   The game version (1.0.1 or 2.0.0) is compiled in (runtime/game_version.h, make VERSION=<v>): <v> is TOTK_GAME_DIR.
    The self-contained mode is used when Contents/Resources/xcx holds the game binary and XCX_WORK is not set.
    Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
    What each setting does in the runtime:
@@ -47,10 +48,14 @@ enum { NPRESETS = sizeof presets / sizeof *presets };
 static const int sizes[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
 static const int outputs[] = {0, 2160, 1440, 1080, 900};
 
+/* The game binary: build/xcx-native inside a self-contained app, build/xcx-native-<v> in a work folder (each version
+   has its own there; scripts/app_bundle.py). */
+#define APP_BINARY @"build/xcx-native"
+#define WORK_BINARY @"build/xcx-native-" TOTK_GAME_DIR
 /* The game folder inside a self-contained app, when it holds the game binary (else nil). */
 static NSString *bundle_root(void) {
     NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"xcx"];
-    return [NSFileManager.defaultManager isExecutableFileAtPath:[root stringByAppendingPathComponent:@"build/xcx-native"]] ? root : nil;
+    return [NSFileManager.defaultManager isExecutableFileAtPath:[root stringByAppendingPathComponent:APP_BINARY]] ? root : nil;
 }
 /* Self-contained unless XCX_WORK names a work folder (a development run of a self-contained app's launcher). */
 static BOOL self_contained(void) { const char *e = getenv("XCX_WORK"); return !(e && *e) && bundle_root() != nil; }
@@ -60,6 +65,7 @@ static NSString *work_folder(void) {
     if (e && *e) return @(e);
     return bundle_root() ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXWorkFolder"];
 }
+static NSString *game_binary(void) { return [work_folder() stringByAppendingPathComponent:self_contained() ? APP_BINARY : WORK_BINARY]; }
 static NSString *data_folder(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/XCX"]; }
 /* RomFS mods: <work>/../mods/<name>/romfs with a manifest.tsv (make mods); a self-contained app: <data>/mods. */
 static NSString *mods_folder(void) {
@@ -189,7 +195,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     self.size.enabled = !full; self.output.enabled = full;
     NSMutableString *s = [NSMutableString string];
     self.play.enabled = YES;
-    if (!work_folder() || ![NSFileManager.defaultManager isExecutableFileAtPath:[work_folder() stringByAppendingPathComponent:@"build/xcx-native"]]) {
+    if (!work_folder() || ![NSFileManager.defaultManager isExecutableFileAtPath:game_binary()]) {
         if (work_folder()) [s appendFormat:T("No encuentro el juego en %@.", "The game is not in %@."), work_folder()];
         else [s appendString:T("Esta app no contiene el juego: vuelve a crearla con build_app.py.", "This app does not hold the game: build it again with build_app.py.")];
         self.play.enabled = NO;
@@ -240,8 +246,9 @@ int main(int argc, char **argv) {
            nothing on screen); doing it during the build makes the player's first start immediate. */
         if (argc > 1 && !strcmp(argv[1], "--check")) {
             NSString *declared = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-            int ok = bundle_root() != nil && [declared isEqualToString:@TOTK_GAME_VERSION];
-            printf("%s: game version %s\n", ok ? "ok" : "missing game binary or version mismatch", TOTK_GAME_VERSION);
+            NSString *folder = [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXGameVersion"];   // absent in apps built before 2.0.0
+            int ok = bundle_root() != nil && [declared isEqualToString:@TOTK_GAME_VERSION] && (!folder || [folder isEqualToString:@TOTK_GAME_DIR]);
+            printf("%s: game version %s (%s)\n", ok ? "ok" : "missing game binary or version mismatch", TOTK_GAME_VERSION, TOTK_GAME_DIR);
             return ok ? 0 : 1;
         }
         [NSApplication sharedApplication]; NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
@@ -315,11 +322,12 @@ int main(int argc, char **argv) {
                   bundled ? "self-contained app (game data inside the app)" : "development app (game data in the work folder)",
                   work.UTF8String, image.stringByResolvingSymlinksInPath.UTF8String,
                   bundled ? cache.UTF8String : "next to the game binary (build/shader-cache)"); }
+        fprintf(stderr, "[launcher] game version %s (%s)\n", TOTK_GAME_VERSION, TOTK_GAME_DIR);
         fprintf(stderr, "[launcher] work %s, patches %s, present %s Hz, display %s, fullscreen %s, window %s, drawable scale %s, MetalFX %s, mod %s\n",
                 work.UTF8String, getenv("XCX_PATCHES") ?: "none", getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
                 getenv("TOTK_DRAWABLE_SCALE") ?: "1", getenv("TOTK_MFX_OUTPUT") ? "on" : "off", getenv("TOTK_ROMFS_MODS"));
-        NSString *binary = [work stringByAppendingPathComponent:@"build/xcx-native"];
-        char *const args[] = {(char *)binary.fileSystemRepresentation, "rewritten/v101", "boot", NULL};
+        NSString *binary = game_binary();
+        char *const args[] = {(char *)binary.fileSystemRepresentation, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
         execv(args[0], args);
         fprintf(stderr, "[launcher] execv failed: %s\n", strerror(errno));
         fail([NSString stringWithFormat:T("No se pudo iniciar el juego. Mira %@.", "Starting the game failed. See %@."), log]);

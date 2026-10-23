@@ -16,7 +16,7 @@ named by hash and subject. Game data, keys and saves are never committed (see `.
 | 2 | A runtime target with the Bayonetta-only parts compiled out, booting to `nnMain` | done 2026-10-23 |
 | 3 | Follow every unknown service / command / NVN call until the first `nvnQueuePresentTexture` | done 2026-10-23 (title screen; menus answer input) |
 | 4 | A picture, audio (Wwise), input, saves | in progress: controllable gameplay and battle with characters drawn; saves write; key 2 interpolates (too slow on an M1) |
-| 5 | Performance, shaders, packaging as an app | in progress: `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--gui` does the same from a native window; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
+| 5 | Performance, shaders, packaging as an app | in progress: update 2.0.0 supported next to 1.0.1 (built and played to the field, 2026-10-23); `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--gui` does the same from a native window; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
 
 ## Log
 
@@ -979,3 +979,109 @@ build; a build that failed (empty keys file, at identify) and one cancelled with
 folder in place; a full build into a scratch app (127 s, macOS's first check 118 s) deleted it (its files took 28.2 GB,
 all shared clones, so no space came back), and the scratch app still passed `codesign --verify --strict` and `--check`
 before it was deleted. The ten files of the save profile have the same SHA-256 before and after everything.
+
+### 2026-10-23: update 2.0.0 next to 1.0.1
+
+The stage-0 study of 2.0.0 (`XCX_build/analysis/v200/FEASIBILITY-v200.md`, outside git) said go: `sdk`, `subsdk0` and
+`rtld` are unchanged, `main` is a rebuild with the same imports, and the port holds no game address. This entry makes the
+version a parameter, so a player builds either version, and updating means building again with the newer update.
+
+**Before anything ran**, the save profile was copied (`cp -R`) to `personal/xcx-save-backups/profile-1.0.1-2026-10-23/`
+and every one of its 10 files checked by SHA-256 against the original.
+
+**The version table.** `scripts/app_bundle.py` `VERSIONS`: `v101` = 1.0.1 = Patch meta v65536, `v200` = 2.0.0 =
+v196608 (the meta version is a release counter, 65536 a release, so an unknown one is named by number and release index,
+not by a guessed display version). Everything takes the version from there: the expected file
+(`assets/expected-<display>.json`; `expected-v2.0.0.json` is new), `extract_code.py`, `merge_romfs.py` and
+`romfs_control.py` (`--version`, `--update`), `identify_game.py` (`game_version`, `display_version` on the Patch meta),
+`prepare_runtime.py` / `prepare_patches.py` (`--version`; headers in `build/<v>/`, `analysis/runtime-layout-<v>.json`,
+mods in `mods/<display>/`), `symbolize.py` (`XCX_VERSION`), the Makefile (`VERSION ?= v101`, `-DXCX_GAME_V200`;
+`build/xcx-native-<v>`, `build/launcher-<v>`), `runtime/game_version.h` (selects 1.0.1 / 2.0.0 and the folder), the
+launcher (`"rewritten/" TOTK_GAME_DIR`, the per-version binary in a work folder, `build/xcx-native` inside an app;
+`--check` prints `game version 2.0.0 (v200)` and checks the new Info.plist key `XCXGameVersion`), and the iOS tools
+(`build_ipa.py --version`, `XCX_VERSION_FLAGS` in `project.yml`, `main.m`'s message). The graphics objects, shader
+tools and shader cache stay shared.
+
+**The merge.** `merge_romfs.Patched` accepts the AES-CTR-Ex table ending at the indirect table (2.0.0) as well as at
+itself (1.0.1); in the first case one plain AES-CTR row with the section's own generation covers the indirect table.
+`index.json` records `version` and `aes_ctr_ex_covers`.
+
+**`build_app.py`.** The version built is the update's: the XCI alone builds 1.0.1; `--update <2.0.0 NSP>` builds 2.0.0
+and wins over the update inside the XCI; a base NSP or base-only file needs `--update` (1.0.1 or 2.0.0). Unsupported
+versions, an update given as the game file, a base given as `--update` and a base-only file without an update are refused
+with messages that name the file and the supported versions. The free-space check now runs after identification (for the
+version's own image). When the output holds an app of another version it says so before the long steps: updating keeps
+the saves (they are in the profile, not the app); once 2.0.0 has saved, the save may not load in 1.0.1; and it prints
+the `cp -R` command that backs the profile up (going back to 1.0.1 warns the other way). App stamps and rewrite-check
+records are per version (the old flat 1.0.1 record moves under `v101` by itself). The JSON progress: `plan` lists the
+supported versions (the version is not known until the files are read), `start` (now after identify) carries `version`,
+`display`, the replaced app's version and the backup command, and `done` carries the version. `--identify` reports what
+the files are for the window. The iOS prerequisites now include the iOS platform (Xcode > Settings > Components, by an
+available iOS runtime of the SDK's major version).
+
+**The window.** Each chosen file shows what it is (`--identify`: "XCI: base v0 + update 1.0.1", "NSP: update 2.0.0",
+or what is wrong with it). The update row is always there: optional for an XCI holding 1.0.1 ("a newer update NSP
+(2.0.0) updates the game"), required for an NSP or a file with no update inside. A line says which version is built and
+from which update. Over an older app it shows the save warning with **Back Up Saves Now** (a copy to
+`profile-<version>-backup-<date>` next to the profile), and Build asks first (**Back Up Saves and Build** / **Build
+Without Backup** / **Cancel**); the button reads "Update App to 2.0.0". For iPhone and iPad, an optional **Install on my
+iPhone or iPad** section wraps `ios/tools/install_device.py`: device picker (devicectl, by name and model) with
+refresh, the signing team or the steps to make an Apple Development certificate, notes on unlocking, Xcode's
+"Preparing", the iOS platform component and the free Apple ID's 7 days, a game-data toggle (the IPA's own version, read
+from its Info.plist), and progress for device, profile, sign, install and game data part N/M. `install_device.py`
+gained `--progress json`, `--list-devices` and `--dry-run` (stops before the profile), and stops with the tool's own
+words plus what to do, for example for "may need to be unlocked to recover from previously reported preparation errors".
+
+**Inputs changed during the work.** Midway the user replaced the XCI with `Xenoblade Chronicles X Definitive Edition
+Base Game.xci` (14,878,464,512 bytes). It holds the same base and 1.0.1 NCAs at the same offsets and the system update
+with the six fonts (`--firmware` not needed). A first 2.0.0 merge that was running when the old file went away was
+deleted and redone.
+
+**Verified:**
+
+- 1.0.1 merge with the new rule (stream through `verify_ivfc` to /dev/null; from both XCIs): `12c1bf46…`, 14,331,516,488
+  bytes, 874,727 level-5 blocks, 14,279,799,456 / 79,831,976 bytes from base / update: equal to the pins. The table
+  covers itself.
+- 2.0.0 merge: `31afb6d9…`, 14,331,812,280 bytes, 874,745 blocks, 14,272,515,648 / 87,411,576, the table ends at the
+  indirect table. Byte-flip control `romfs_control.py`: 2/2 caught for 1.0.1 and 2/2 for 2.0.0 (update data block
+  9785, base block 0; the offsets are the same in both because the first update range is the same data at the same
+  place, while the tables differ: 519 / 572 indirect rows, 1 / 36 AES-CTR-Ex rows).
+- 2.0.0 build: `build_app.py "personal/<Base Game XCI>" -k personal/prod.keys --update personal/xcx200.nsp -o
+  XCX_build/test-v200/...app`, 289 s (merge 34 s, data bundle signed 81 s, macOS's first check 117 s). Every value of
+  `expected-v2.0.0.json` matched the build's own output: ExeFS (main `0a9dbf1f…`, npdm `75dc2bc1…`, sdk, subsdk0, rtld),
+  build ID `EC4ED46B…`, the three rewrites (`fc092df7…`, `9d629869…`, `407f783c…`; re-derived from scratch by the
+  build's rewrite step in a later run, 68 s), structck OK and equiv 0 divergent sites with 300/300 mutations caught per
+  module (main 11,944 sites, sdk 15,078, subsdk0 9,787), the RomFS above, the base and update NCA records. `make prepare
+  VERSION=v200`: 206,670 relocations, main PLT probe `0x1732500`, 53 files. Info.plist: 2.0.0, `XCXGameVersion` v200.
+- 1.0.1 after the change: built again from both XCIs: code, rewrite, checks, fonts and data reused; the runtime relinked
+  once for its new name; then 1.2-1.7 s; `--check` prints `ok: game version 1.0.1 (v101)`.
+- 2.0.0 runtime: `xcx-native-v200 rewritten/v200 probe` passes (4,000 calls, 4 threads). Headless boot with a scratch
+  profile: `game version 2.0.0`, `ENTER nnMain`, save storage mounted, Metal up, and the stop where a window is needed.
+- 2.0.0 play (the test app, `open --env XCX_PLAY=1`, scripted J for Continue, 240 s limit): first frame 10 s, title with
+  **Ver. 2.0.0** (`XCX_build/shots/v200/02_50s_title.png`), Continue into the field in Primordia
+  (`03_110s_field.png`, `04_125s_field.png`), closed at 130 s. 0 【红】 and 0 FATAL lines, no host stop, so no new
+  service or import needed an answer. Shader cache 8,924 files before and after: no shader translated. Clear sinking
+  works as in 1.0.1 (32,894 clears sunk by frame 2700). No battle was reached in the scripted run.
+- Saves: the game read `gamedata01/02/03`, `gamedataa`, `systemdata` and `socialdata`, and wrote nothing in that run;
+  all 10 profile files have the same SHA-256 before and after, equal to the backup. So 2.0.0 loads a 1.0.1 save, but
+  whether a save 2.0.0 writes still loads in 1.0.1 is **not known**: no save was written to test it.
+- Matrix through `build_app.py` (test containers made from the XCI's own NCAs in a scratch folder and deleted afterwards):
+  XCI alone -> 1.0.1 (full build); XCI + 2.0.0 NSP -> 2.0.0 (full build); base-only NSP + 2.0.0 NSP -> 2.0.0 (full
+  build, the rewrite re-derived; the merge streamed: `31afb6d9…`); base-only NSP + 1.0.1 NSP -> 1.0.1 (full build into the
+  1.0.1 test app; merge streamed: `12c1bf46…`); base-only NSP alone, the update NSP as the game file (with and without
+  `--update`), the base as `--update`: refused, each with its message; an unsupported version (v131072, simulated in the
+  identify report, as no such file exists here): "update version v131072 (release 2) is not supported; this port runs
+  1.0.1 (v65536), 2.0.0 (v196608)".
+- The window compiles (`xcrun swiftc`). Test-hook captures in `XCX_build/shots/builder-v200/`: XCI + 2.0.0 over the 1.0.1
+  test app (versions, "Builds version 2.0.0", the save warning, the update sheet), the base-only file (update required,
+  Build disabled), base + 1.0.1 and base + 2.0.0, the update as the game file (flagged, nothing built), the iOS states
+  (platform, prerequisites with 11 checks, the install section with the paired iPhone and the team) and the no-certificate
+  state (`XCX_BUILDER_TEST_NO_TEAM=1`). `install_device.py --list-devices`, `--dry-run` and two error cases ran with
+  `--progress json`. No IPA was built and nothing was installed or signed.
+- `py_compile` passes on every changed script. The 2.0.0 test app was unregistered and deleted.
+
+**Not done / open.** Whether 1.0.1 reads a save 2.0.0 has written (needs a save made in 2.0.0, then 1.0.1 run on a copy
+of the profile). No battle in 2.0.0. The window's file pickers were not clicked by hand (the hook sets the fields). The
+install section's Install button was not pressed. The old `build/xcx-native`, `build/launcher` and the three generated
+headers directly in `build/` are 1.0.1 leftovers of the old layout; nothing uses them now.
+

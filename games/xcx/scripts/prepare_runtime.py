@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Bind the native loader to the verified Xenoblade Chronicles X 1.0.1 rewrite and RomFS: generated headers stay in the work folder.
+"""Bind the native loader to the verified Xenoblade Chronicles X rewrite and RomFS of one version (--version v101, the
+default, or v200): generated headers stay in the work folder.
 
-Writes <work>/build/runtime_tables.h (modules, symbols, relocations, gates), romfs_config.h and
-extracted/v101/romfs/runtime-index.bin (the RomFS index the runtime reads), and shared_fonts_config.h.
+Writes <work>/build/<v>/runtime_tables.h (modules, symbols, relocations, gates), romfs_config.h and
+shared_fonts_config.h, extracted/<v>/romfs/runtime-index.bin (the RomFS index the runtime reads) and
+analysis/runtime-layout-<v>.json.
 Adapted from the original MacNativeGames TotK code (its games/totk/scripts/prepare_runtime.py, prepare_romfs_backend.py
 and prepare_shared_fonts.py), by way of that project's Bayonetta 3 fork (games/by3/scripts/prepare_runtime.py), and
-retargeted to Xenoblade Chronicles X 1.0.1; every input is checked against assets/expected-v1.0.1.json first.
+retargeted to Xenoblade Chronicles X; every input is checked against the version's assets/expected-<display>.json first.
 """
 import argparse
 import hashlib
@@ -16,10 +18,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE / 'third_party/d2r'))   # this folder's own copy of the rewriter
+sys.path.insert(0, str(HERE / 'scripts'))
 from relr import decode_relr
+import app_bundle   # the version table
 
-VERSION = 'v101'
-EXPECTED = json.loads((HERE / 'assets/expected-v1.0.1.json').read_text())
+VERSION = app_bundle.DEFAULT_VERSION              # set by --version in main()
+EXPECTED = app_bundle.expected(VERSION)
 
 
 def sha(path):
@@ -146,7 +150,7 @@ def runtime_tables(work, out):
     lines.append(f'#define PROBE_PLT {plt[0]}ULL\n#define PROBE_SLOT {slot}ULL')
     write(out / 'runtime_tables.h', '\n'.join(lines) + '\n')
     (work / 'analysis').mkdir(exist_ok=True)
-    write(work / 'analysis/runtime-layout.json', json.dumps(modules, indent=2) + '\n')
+    write(work / f'analysis/runtime-layout-{VERSION}.json', json.dumps(modules, indent=2) + '\n')
     return dict(modules=len(modules), relocations=sum(len(m['relocs']) for m in modules), main_plt=hex(plt[0]))
 
 
@@ -193,10 +197,14 @@ def shared_fonts_config(work, out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work', type=Path, default=HERE.parents[1] / 'XCX_build')   # <repository root>/XCX_build
-    work = parser.parse_args().work.resolve()
-    out = work / 'build'
+    parser.add_argument('--version', default=app_bundle.DEFAULT_VERSION, choices=list(app_bundle.VERSIONS))
+    args = parser.parse_args()
+    global VERSION, EXPECTED
+    VERSION, EXPECTED = args.version, app_bundle.expected(args.version)
+    work = args.work.resolve()
+    out = work / app_bundle.generated(VERSION)
     out.mkdir(parents=True, exist_ok=True)
-    print(json.dumps(dict(runtime=runtime_tables(work, out), romfs=romfs_config(work, out),
+    print(json.dumps(dict(version=VERSION, runtime=runtime_tables(work, out), romfs=romfs_config(work, out),
                           shared_fonts=shared_fonts_config(work, out))))
 
 

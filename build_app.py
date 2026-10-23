@@ -1,40 +1,51 @@
 #!/usr/bin/env python3
-"""Turn your own copy of Xenoblade Chronicles X: Definitive Edition 1.0.1 into a native Mac app, in one command (or,
-experimentally, an unsigned iPhone / iPad IPA with --platform ios).
+"""Turn your own copy of Xenoblade Chronicles X: Definitive Edition (update 1.0.1 or 2.0.0) into a native Mac app, in one
+command (or, experimentally, an unsigned iPhone / iPad IPA with --platform ios).
 
     python3 build_app.py <game.xci | base.nsp> -k <prod.keys> [--update <update.nsp>] [--firmware <folder>]
                          [-o <output .app | .ipa>] [--work <folder>] [--title-keys <title.keys>] [--platform macos|ios]
                          [--delete-work]
 
-Supported: Xenoblade Chronicles X: Definitive Edition, base 0100453019AA8000 (v0) with update 1.0.1 0100453019AA8800
-(v65536), as
-  - one XCI holding the base and the update (as the game card does): nothing else is needed;
-  - a base NSP (or a base-only XCI) with --update <the 1.0.1 update NSP>.
-The game is recognised by the title IDs and versions inside the files (games/xcx/scripts/identify_game.py), never by
-the file name; other titles and other versions are refused with a message naming what the file is. NCAs of an NSP are
+Supported: Xenoblade Chronicles X: Definitive Edition, base 0100453019AA8000 (v0) with its update 0100453019AA8800 in
+version 1.0.1 (v65536) or 2.0.0 (v196608) (games/xcx/scripts/app_bundle.py VERSIONS), as
+  - one XCI holding the base and the 1.0.1 update (as the game card does): builds 1.0.1, nothing else is needed;
+  - the XCI (or a base NSP / base-only XCI) with --update <the 2.0.0 update NSP>: builds 2.0.0 (the update given wins
+    over the one inside the XCI; 2.0.0 is cumulative over the base, so 1.0.1 is not needed);
+  - a base NSP (or a base-only XCI) with --update <the 1.0.1 update NSP>: builds 1.0.1.
+The version built is the update's. The game is recognised by the title IDs and versions inside the files
+(games/xcx/scripts/identify_game.py), never by the file name; other titles and other versions are refused with a message
+naming what the file is and the versions that are supported.
+
+Updating: build again with the newer update to the same output (-o, or the default next to the game file). The app is
+replaced; the saves are not in the app (~/Library/Application Support/MacNativeGames/XCX/profile), so the new version
+continues from them. A save that 2.0.0 has loaded and saved may not load in 1.0.1 again: the build says so when it
+replaces an older app and prints the command that backs the profile up. Both versions can be built from one work folder
+(extracted/<v>, rewritten/<v>, build/<v> stay apart), so going back to 1.0.1 is a rebuild that reuses its steps. NCAs of an NSP are
 decrypted with the NSP's common ticket, or, when it has none (or a personalized one), with --title-keys <title.keys>.
 
-Steps, each one checked against games/xcx/assets/expected-v1.0.1.json, so a damaged dump or another version stops the
+Steps, each one checked against games/xcx/assets/expected-<version>.json (1.0.1 or 2.0.0), so a damaged dump or another version stops the
 build at the first wrong file (a different dump of the same version is accepted: main.npdm by Nintendo's ACID signature
 or, re-signed by a dump tool, once the code modules match; shared fonts by a verified, valid BFTTF structure):
-  1. code: the 1.0.1 ExeFS (games/xcx/scripts/extract_code.py: FS header, hash table and every block verified), the NSO
+  1. code: the update's ExeFS (games/xcx/scripts/extract_code.py: FS header, hash table and every block verified), the NSO
      segments checked and inventoried (prepare_modules.py), the three code modules rewritten for Apple silicon
      (games/xcx/third_party/d2r/patch_nso.py) and the rewrite checked twice: structure (structck.py) and semantics in
      an emulator with random states and mutation controls (equiv.py)
   2. fonts: the six system shared fonts, from the system update the XCI carries (its update partition) or from
      --firmware <unpacked firmware NCA folder> (needed for an NSP); every NCA level and each font verified
      (extract_shared_fonts.py)
-  3. data: the base RomFS and the 1.0.1 BKTR patch merged into one 14.3 GB image, all six IVFC levels verified
+  3. data: the base RomFS and the update's BKTR patch merged into one 14.3 GB image, all six IVFC levels verified
      (merge_romfs.py)
-  4. prepare: the runtime's generated tables, RomFS index and fonts config (make prepare: scripts/prepare_runtime.py)
-  5. runtime: the game binary (make runtime)
+  4. prepare: the runtime's generated tables, RomFS index and fonts config (make prepare VERSION=<v>:
+     scripts/prepare_runtime.py)
+  5. runtime: the game binary of that version (make runtime VERSION=<v>)
   6. shader tools: the prebuilt shader translator, checked against its SHA-256, and SPIRV-Cross at its pinned commit,
      compiled with clang (make shader-tools)
   7. app: the launcher and the icon from the game's own control data (make launcher icon), then a self-contained app:
      the code, fonts and RomFS index cloned into it, the RomFS image as a data bundle signed once in the work folder and
      cloned into Contents/Helpers (APFS clones: no extra space on the same volume), ad-hoc signed, registered, and run
      once in its check-only mode so that macOS's first-run scan happens now and not at the player's first start.
-The Makefile in games/xcx stays the developer path (make prepare runtime app): this script runs the same targets.
+The Makefile in games/xcx stays the developer path (make prepare runtime app VERSION=<v>): this script runs the same
+targets.
 
 Every intermediate file is in the work folder (default: XCX_build at the repository root, next to this script, wherever
 the game file is; the app goes next to the game file); a second run reuses what is already done and correct. The app
@@ -60,10 +71,14 @@ so only the variants this Mac has already translated are carried and most of the
 
 opens a window that does the same without the command line (games/xcx/builder: a small SwiftUI app, compiled with
 xcrun swiftc on first use into ~/Library/Caches/MacNativeGames/xcx-builder, and again when its sources change). The
-window runs this script with --progress json: one JSON object a line on stdout (the steps, each start and end with
-its time, the error with the step it stopped at, the output), the human output on stderr; SIGTERM then cancels the
+window runs this script with --progress json: one JSON object a line on stdout (the plan, with the supported versions;
+the start, with the version being built and the version of the app it replaces; the steps, each start and end with its
+time; the error with the step it stopped at; the output), the human output on stderr; SIGTERM then cancels the
 build cleanly (the work folder is resumable). --check-requirements [--platform ios] reports every requirement with
 what to do about the missing ones (also with --progress json), for the window's prerequisites panel.
+--identify <game> [--update <nsp>] -k <prod.keys> [--out <app>] reports what the files are (base, update version) and
+the version of the app at the output, without building (one "identified" event a file with --progress json), for the
+window's version labels.
 """
 import argparse
 import contextlib
@@ -87,12 +102,21 @@ GAME = REPO / 'games/xcx'
 sys.path.insert(0, str(GAME / 'scripts'))
 import app_bundle   # noqa: E402  standard library only: the app's name, Info.plist and the files it carries
 
-EXPECTED = json.loads((GAME / 'assets/expected-v1.0.1.json').read_text())
-VERSION = app_bundle.VERSION                     # 'v101': the work folder's version folder (runtime/game_version.h)
-BASE_TITLE = EXPECTED['title_id']                # 0100453019AA8000
-UPDATE_TITLE = EXPECTED['update_title_id']       # 0100453019AA8800
-UPDATE_VERSION = EXPECTED['version']             # 65536 = 1.0.1
-DISPLAY = EXPECTED['display_version']
+PINS = {v: app_bundle.expected(v) for v in app_bundle.VERSIONS}   # games/xcx/assets/expected-<display>.json
+BASE_TITLE = PINS[app_bundle.DEFAULT_VERSION]['title_id']          # 0100453019AA8000 (the same in every version)
+UPDATE_TITLE = PINS[app_bundle.DEFAULT_VERSION]['update_title_id']  # 0100453019AA8800
+# The version being built, chosen by identify() from the update's Patch meta version (select_version): the work
+# folder's version folder (v101 / v200: extracted/<v>, rewritten/<v>, build/<v>), its pins and its display version.
+VERSION = None
+EXPECTED = None
+DISPLAY = None
+SUPPORTED = app_bundle.supported()               # '1.0.1 (v65536), 2.0.0 (v196608)'
+
+
+def select_version(version):
+    global VERSION, EXPECTED, DISPLAY
+    VERSION, EXPECTED = version, PINS[version]
+    DISPLAY = EXPECTED['display_version']
 GAME_NAME = 'Xenoblade Chronicles X: Definitive Edition'
 # Other games a file may turn out to be, for the message when it is not this one (title IDs of the base games)
 OTHER_TITLES = {'0100F2C0115B6000': 'The Legend of Zelda: Tears of the Kingdom',
@@ -233,6 +257,11 @@ def check(what, got, want):
     if got != want:
         raise BuildError(f'{what}: SHA-256 {str(got)[:16]}... is not the expected {str(want)[:16]}... '
                          f'(is this {GAME_NAME} {DISPLAY}, and is the dump complete?)')
+
+
+def version_order(version):
+    """Older versions sort first (by the update's Patch meta version)."""
+    return app_bundle.VERSIONS[version]['update_version']
 
 
 def read_json(path):
@@ -445,8 +474,11 @@ def is_within(path, folder):
 
 
 def work_markers(work):
-    """The files every finished build_app.py run leaves in its work folder: the step times and the ExeFS manifest."""
-    return [work / 'logs/build-times.json', work / f'extracted/{VERSION}/extraction-manifest.json']
+    """The files every finished build_app.py run leaves in its work folder: the step times and an ExeFS manifest (of
+    the version built, or of any version before the version is known)."""
+    versions = [VERSION] if VERSION else list(app_bundle.VERSIONS)
+    manifests = [work / f'extracted/{v}/extraction-manifest.json' for v in versions]
+    return [work / 'logs/build-times.json', next((m for m in manifests if m.is_file()), manifests[0])]
 
 
 def delete_work_refusal(work, out, inputs, finished):
@@ -504,8 +536,8 @@ def delete_work(work, out, inputs, platform_name):
         free_before = shutil.disk_usage(existing(work)).free
         say(f'deleting the work folder {work} ({size / GB:.1f} GB of files; --delete-work)')
         if platform_name == 'ios':
-            say('   it holds the game data the IPA is installed with (extracted/v101/romfs/romfs.bin, install_device.py '
-                '--game-data): a new build makes it again')
+            say(f'   it holds the game data the IPA is installed with ({app_bundle.romfs(VERSION)}/romfs.bin, '
+                'install_device.py --game-data): a new build makes it again')
         with critical():   # a cancel now waits until the folder is gone, never half a folder
             remove_tree(work)
             link = make_safe_link(work)
@@ -696,14 +728,30 @@ def describe_titles(report):
     return ', '.join(named) if named else 'title ' + ', '.join(titles) if titles else 'no game content'
 
 
-def identify(vpy, logs, game, update, keys, title_keys):
-    """Check that the files are this game, base v0 and update 1.0.1, before any long step. Returns the update's source
-    file (the game file itself for an XCI holding both)."""
-    log = logs / 'identify.log'
-    run([vpy, GAME / 'scripts/identify_game.py', game, *([update] if update else []), '--keys', keys], log, quiet=False)
+def read_reports(vpy, logs, files, keys, log_name='identify.log'):
+    """identify_game.py's report of each file (one JSON line each)."""
+    log = logs / log_name
+    run([vpy, GAME / 'scripts/identify_game.py', *files, '--keys', keys], log, quiet=False)
     reports = [json.loads(line) for line in log.read_text().splitlines() if line.startswith('{')]
-    if len(reports) != (2 if update else 1):
+    if len(reports) != len(files):
         raise BuildError(f'could not read the game files (see {log})')
+    return reports
+
+
+def own_patches(report):
+    return [m for m in report.get('metas', []) if m['type'] == 0x81 and m['title_id'] == UPDATE_TITLE]
+
+
+def unsupported(name, number):
+    return BuildError(f'{name}: update version {app_bundle.describe(number)} is not supported; this port runs '
+                      f'{SUPPORTED}. Pass the 1.0.1 or 2.0.0 update NSP with --update.')
+
+
+def identify(vpy, logs, game, update, keys, title_keys):
+    """Check that the files are this game, base v0 and a supported update, before any long step, and choose the version
+    to build: the update's (--update wins over the update inside an XCI). Returns the update's source file (the game
+    file itself for an XCI holding both) and the version folder (v101 / v200)."""
+    reports = read_reports(vpy, logs, [game] + ([update] if update else []), keys)
     for path, r in zip([game] + ([update] if update else []), reports):
         if 'error' in r:
             raise BuildError(f'{path.name}: {r["error"]} (is it {GAME_NAME}, and is -k this Switch\'s prod.keys?)')
@@ -713,33 +761,33 @@ def identify(vpy, logs, game, update, keys, title_keys):
         raise BuildError(f'{game.name} is not {GAME_NAME} ({BASE_TITLE}): it holds {describe_titles(g)}')
     base_metas = [m for m in g['metas'] if m['type'] == 0x80 and m['title_id'] == BASE_TITLE]
     if not base_metas:
-        if any(m['type'] == 0x81 and m['title_id'] == UPDATE_TITLE for m in g['metas']):
-            raise BuildError(f'{game.name} is the update of {GAME_NAME}, not the base game: pass the base game as the '
-                             f'game file and this file with --update')
+        if own_patches(g):
+            raise BuildError(f'{game.name} is the update of {GAME_NAME}, not the base game: pass the base game (the XCI '
+                             f'or the base NSP) as the game file and this file with --update')
         raise BuildError(f'{game.name} holds no base game of {GAME_NAME} (Application meta {BASE_TITLE}); '
                          f'add-on content and other packages are not supported')
     if base_metas[0]['version'] != 0:
         raise BuildError(f'{game.name}: base game version {base_metas[0]["version"]}; only the original base (v0) is supported')
+    inside = own_patches(g)
     if update:
         u = reports[1]
         patches = [m for m in u['metas'] if m['type'] == 0x81]
         if any(m['type'] == 0x80 for m in u['metas']) and not patches:
-            raise BuildError(f'--update {update.name} is a base game, not the update: pass the 1.0.1 update NSP')
-        mine = [m for m in patches if m['title_id'] == UPDATE_TITLE]
+            raise BuildError(f'--update {update.name} is a base game, not the update: pass the update NSP (1.0.1 or 2.0.0)')
+        mine = own_patches(u)
         if not mine:
             raise BuildError(f'--update {update.name} is not the update of {GAME_NAME} ({UPDATE_TITLE}): it holds '
                              f'{describe_titles(u)}')
-        source, report, version = update, u, mine[0]['version']
+        source, number = update, mine[0]['version']
     else:
-        mine = [m for m in g['metas'] if m['type'] == 0x81 and m['title_id'] == UPDATE_TITLE]
-        if not mine:
-            raise BuildError(f'{game.name} holds only the base game (v0); the port runs {DISPLAY}: pass the {DISPLAY} '
-                             f'update NSP with --update <update.nsp>')
-        source, report, version = game, g, mine[0]['version']
-    if version != UPDATE_VERSION:
-        shown = f'{version >> 26}.{(version >> 20) & 0x3f}.{(version >> 16) & 0xf}'
-        raise BuildError(f'{source.name}: update version {shown} (v{version}); only {DISPLAY} (v{UPDATE_VERSION}) is '
-                         f'supported')
+        if not inside:
+            raise BuildError(f'{game.name} holds only the base game (v0): pass an update NSP with --update '
+                             f'<update.nsp> ({SUPPORTED})')
+        source, number = game, inside[0]['version']
+    version = app_bundle.by_update_version(number)
+    if version is None:
+        raise unsupported(source.name, number)
+    select_version(version)
     # Rights-managed NCAs need their title key: a common ticket in the same file, else title.keys
     for path, r in zip([game] + ([update] if update else []), reports):
         common = {t['rights_id'] for t in r['tickets'] if t['kind'] == 'common'}
@@ -749,8 +797,17 @@ def identify(vpy, logs, game, update, keys, title_keys):
             raise BuildError(f'{path.name} has no common ticket for {len(missing)} of its NCAs'
                              + (' and title.keys has no key for them' if title_keys else
                                 ': pass --title-keys <title.keys> (dumped from your own Switch)'))
-    say(f'{GAME_NAME}: base v0 from {game.name}, update {DISPLAY} from {source.name} (by the IDs inside the files)')
-    return source
+    note = ''
+    if update and inside:
+        shown = app_bundle.describe(inside[0]['version'])
+        note = (f'; the update given with --update wins over the {shown} update inside {game.name}'
+                if inside[0]['version'] != number else '')
+        if inside[0]['version'] > number:
+            say(f'note: {game.name} holds a newer update ({shown}) than --update {update.name} ({DISPLAY}); building '
+                f'{DISPLAY} as asked')
+    say(f'{GAME_NAME}: base v0 from {game.name}, update {DISPLAY} from {source.name} (by the IDs inside the files{note}); '
+        f'building {DISPLAY}')
+    return source, version
 
 
 # ---- steps ----
@@ -767,8 +824,8 @@ class Build:
 
     def make(self, *targets, log, extra=()):
         jobs = os.cpu_count() or 4
-        run(['make', f'-j{jobs}', *targets, f'WORK={self.make_work}', f'PY={self.vpy}', *extra], self.logs / log,
-            cwd=GAME, env=self.env)
+        run(['make', f'-j{jobs}', *targets, f'WORK={self.make_work}', f'PY={self.vpy}', f'VERSION={VERSION}', *extra],
+            self.logs / log, cwd=GAME, env=self.env)
 
     def tk_args(self):
         return ['--title-keys', self.title_keys] if self.title_keys else []
@@ -782,7 +839,7 @@ class Build:
                 say(f'1/7 code: extracting and verifying the {DISPLAY} ExeFS')
                 if exefs.exists():
                     shutil.rmtree(exefs)
-                self.py('scripts/extract_code.py', self.game, '--keys', self.keys, '--output', exefs,
+                self.py('scripts/extract_code.py', self.game, '--keys', self.keys, '--output', exefs, '--version', VERSION,
                         *(['--update', self.update] if self.update else []), *self.tk_args(), log='extract_code.log')
                 t['built'] = True
             for name, digest in EXPECTED['exefs_sha256'].items():
@@ -826,7 +883,12 @@ class Build:
         """structck.py (structure) and equiv.py (semantics, emulator) for each module, as the port was verified with.
         Recorded with the image and checker digests, so a later build with the same rewrite does not repeat them."""
         record_path = self.work / 'analysis/rewrite-checks.json'
-        record = read_json(record_path) or {}
+        whole = read_json(record_path) or {}
+        # one record a version ({version: {module: ...}}); the 1.0.1 record of earlier builds is flat ({module: ...})
+        flat = {k: whole.pop(k) for k in ('sdk', 'subsdk0', 'main') if k in whole}
+        if flat:
+            whole.setdefault('v101', flat)
+        record = whole.setdefault(VERSION, {})
         checkers = {n: sha256(GAME / 'third_party/d2r' / n) for n in ('structck.py', 'equiv.py', 'patch_nso.py')}
         llvm = subprocess.run(['xcrun', '--find', 'llvm-objdump'], capture_output=True, text=True).stdout.strip()
         env = dict(self.env, LLVM_BIN=str(Path(llvm).parent), DM_VCACHE=str(self.work / f'cache/verify_{VERSION}'))
@@ -845,8 +907,10 @@ class Build:
                 raise BuildError(f'equiv.py did not report {name} OK with 0 divergent sites; see {self.logs / f"equiv_{name}.log"}')
             record[name] = want
             record_path.parent.mkdir(parents=True, exist_ok=True)
-            record_path.write_text(json.dumps(record, indent=2) + '\n')
+            record_path.write_text(json.dumps(whole, indent=2) + '\n')
             t['built'] = True
+        if flat:   # the flat 1.0.1 record moved under its version
+            record_path.write_text(json.dumps(whole, indent=2) + '\n')
 
     # 2. fonts
     def font_report(self, folder):
@@ -923,7 +987,7 @@ class Build:
                     shutil.rmtree(romfs)
                 say(f'3/7 data: merging the base RomFS and the {DISPLAY} patch into one 14.3 GB image, verifying all six '
                     'IVFC levels (a few minutes)')
-                self.py('scripts/merge_romfs.py', self.game, '--keys', self.keys, '--output', romfs,
+                self.py('scripts/merge_romfs.py', self.game, '--keys', self.keys, '--output', romfs, '--version', VERSION,
                         *(['--update', self.update] if self.update else []), *self.tk_args(), log='merge_romfs.log')
                 report = read_json(index) or {}
                 check('RomFS', report.get('romfs_sha256'), want['sha256'])
@@ -938,18 +1002,18 @@ class Build:
     # 4.-6. the Makefile's targets
     def step_prepare(self):
         with timed('prepare') as t:
-            build = self.work / 'build'
+            build = self.work / app_bundle.generated(VERSION)
             before = {p.name: file_stamp(p) for p in build.glob('*.h')} if build.is_dir() else {}
-            say('4/7 prepare: the runtime\'s tables, RomFS index and fonts config (make prepare)')
-            self.make('prepare', log='prepare.log')
+            say(f'4/7 prepare: the runtime\'s tables, RomFS index and fonts config for {DISPLAY} (make prepare)')
+            self.make('prepare', log=f'prepare-{VERSION}.log')
             t['built'] = {p.name: file_stamp(p) for p in build.glob('*.h')} != before
 
     def step_runtime(self):
-        binary = self.work / 'build/xcx-native'
+        binary = self.work / app_bundle.binary(VERSION)
         with timed('runtime') as t:
             before = file_stamp(binary) if binary.is_file() else None
-            say('5/7 runtime: the game binary (make runtime; a few minutes the first time)')
-            self.make('runtime', log='runtime.log')
+            say(f'5/7 runtime: the {DISPLAY} game binary (make runtime; a few minutes the first time)')
+            self.make('runtime', log=f'runtime-{VERSION}.log')
             t['built'] = file_stamp(binary) != before
 
     def step_shader_tools(self):
@@ -971,9 +1035,9 @@ class Build:
 
     def step_launcher(self):
         with timed('launcher and icon') as t:
-            paths = [self.work / 'build/launcher', self.work / 'build/AppIcon.icns']
+            paths = [self.work / app_bundle.launcher(VERSION), self.work / 'build/AppIcon.icns']
             before = [file_stamp(p) if p.is_file() else None for p in paths]
-            self.make('launcher', log='launcher.log')
+            self.make('launcher', log=f'launcher-{VERSION}.log')
             if not paths[1].is_file():
                 try:   # the game's own icon from its control data; the app goes without one if it cannot be read
                     self.make('icon', log='icon.log', extra=[f'GAME={self.game}', f'KEYS={self.keys}',
@@ -989,8 +1053,8 @@ def data_bundle(work, logs):
     the app carries a clone of it in Contents/Helpers, and the app's seal records only its signature, so packaging does
     not hash 14 GB each time. The stamp names the image (size, mtime and the SHA-256 the merge verified). From the
     original project's build_app.py."""
-    image = work / f'{app_bundle.ROMFS}/romfs.bin'
-    bundle = work / f'build/data-bundles/{app_bundle.DATA_BUNDLE}'
+    image = work / f'{app_bundle.romfs(VERSION)}/romfs.bin'
+    bundle = work / f'build/data-bundles/{app_bundle.data_bundle(VERSION)}'
     stamp = bundle.with_name(bundle.name + '.json')
     st = image.stat()
     want = dict(format=2, size=st.st_size, mtime_ns=st.st_mtime_ns, sha256=(read_json(image.parent / 'index.json') or {}).get('romfs_sha256'))
@@ -1081,7 +1145,7 @@ def install_app(new, out):
 
 
 def game_running(out):
-    binary = str((out / app_bundle.GAME_ROOT / 'build/xcx-native').resolve())
+    binary = str((out / app_bundle.GAME_ROOT / app_bundle.APP_BINARY).resolve())
     procs = subprocess.run(['ps', '-axo', 'comm='], capture_output=True, text=True).stdout.splitlines()
     return binary in (p.strip() for p in procs)
 
@@ -1089,12 +1153,13 @@ def game_running(out):
 def app_inputs(work, bundle_stamp, icon):
     """What the app is made of, for knowing whether an installed app is current: the files cloned into it, the
     launcher, the icon, the data bundle's stamp and the Info.plist."""
-    files = app_bundle.GAME_FILES + ['build/launcher'] + sorted(
+    files = list(app_bundle.game_files(VERSION).values()) + [app_bundle.launcher(VERSION)] + sorted(
         f'{app_bundle.SHARED_FONTS}/{p.name}' for p in (work / app_bundle.SHARED_FONTS).iterdir() if p.is_file())
     stamps = {rel: file_stamp(work / rel) for rel in files}
     if icon:
         stamps['build/AppIcon.icns'] = file_stamp(icon)
-    return dict(format=1, files=stamps, data=read_json(bundle_stamp), info=app_bundle.info_plist(icon=bool(icon)))
+    return dict(format=2, version=VERSION, files=stamps, data=read_json(bundle_stamp),
+                info=app_bundle.info_plist(VERSION, icon=bool(icon)))
 
 
 def step_app_macos(work, out, logs):
@@ -1102,7 +1167,7 @@ def step_app_macos(work, out, logs):
     icon = icon if icon.is_file() else None
     with timed('app: data bundle') as t:
         bundle, t['built'] = data_bundle(work, logs)
-    stamp_path = work / 'build/app-stamp.json'
+    stamp_path = work / f'build/app-stamp-{VERSION}.json'
     with timed('app: assemble and sign') as t:
         want = dict(app_inputs(work, bundle.with_name(bundle.name + '.json'), icon), out=str(out))
         if read_json(stamp_path) == want and out.is_dir() and app_seal_valid(out):
@@ -1112,13 +1177,14 @@ def step_app_macos(work, out, logs):
             tmp = out.with_name(out.name + '.partial')
             if tmp.exists():
                 remove_tree(tmp)
-            app_bundle.write_skeleton(tmp, work / 'build/launcher', icon, app_bundle.info_plist(icon=bool(icon)))
+            app_bundle.write_skeleton(tmp, work / app_bundle.launcher(VERSION), icon,
+                                      app_bundle.info_plist(VERSION, icon=bool(icon)))
             root = tmp / app_bundle.GAME_ROOT
-            for rel in app_bundle.GAME_FILES:
-                clone(work / rel, root / rel)
+            for dest, src in app_bundle.game_files(VERSION).items():
+                clone(work / src, root / dest)
             copy_tree(work / app_bundle.SHARED_FONTS, root / app_bundle.SHARED_FONTS)
             copy_tree(bundle, tmp / 'Contents/Helpers' / bundle.name)
-            link = root / f'{app_bundle.ROMFS}/romfs.bin'   # where the game opens it (runtime/romfs.c)
+            link = root / f'{app_bundle.romfs(VERSION)}/romfs.bin'   # where the game opens it (runtime/romfs.c)
             link.parent.mkdir(parents=True, exist_ok=True)
             link.symlink_to(os.path.relpath(tmp / 'Contents/Helpers' / bundle.name / 'Contents/Resources/romfs.bin', link.parent))
             run(['codesign', '--force', '--sign', '-', tmp], logs / 'sign-app.log')
@@ -1130,6 +1196,9 @@ def step_app_macos(work, out, logs):
                 time.sleep(2)
             with critical():
                 kept = install_app(tmp, out)
+                for other in work.glob('build/app-stamp*.json'):   # the app at `out` is this version now
+                    if other != stamp_path and (read_json(other) or {}).get('out') == str(out):
+                        other.unlink()
                 stamp_path.write_text(json.dumps(want))
             if kept:
                 say('7/7 app: the game data is unchanged; kept the installed copy, so the first start need not verify it again')
@@ -1142,6 +1211,9 @@ def step_app_macos(work, out, logs):
                            timeout=1800)
         if r.returncode:
             raise BuildError(f'the app does not start: {(r.stdout + r.stderr).strip()}')
+        if f'game version {DISPLAY} ' not in r.stdout:
+            raise BuildError(f'the app reports another version than {DISPLAY}: {r.stdout.strip()}')
+        say(f'7/7 app: {r.stdout.strip()}')
     # Metal cache warm-up (the original project compiles its startup shader seed into Metal's cache for the app's own
     # path): this port has no startup shader seed yet, so there is nothing to compile ahead; the game translates and
     # caches its shaders as it meets them (~/Library/Application Support/MacNativeGames/XCX/shader-cache).
@@ -1182,7 +1254,29 @@ def req_ios_tools():
     return ', '.join(f'{t} {shutil.which(t, path=path)}' for t in ('xcodegen', 'cmake'))
 
 
-IOS_REQUIREMENTS = [('Xcode 26 with the iOS SDK', req_ios_xcode, False), ('xcodegen and CMake', req_ios_tools, False)]
+def req_ios_platform():
+    """The iOS platform component (Xcode > Settings > Components): installing on a device builds for it (its
+    provisioning step names the device as the destination). Detected by an available iOS runtime of the SDK's major
+    version (xcrun simctl), which the component installs."""
+    developer, _ = req_ios_xcode()
+    env = dict(os.environ, DEVELOPER_DIR=developer)
+    sdk = subprocess.run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], capture_output=True, text=True, env=env).stdout.strip()
+    r = subprocess.run(['xcrun', 'simctl', 'list', 'runtimes', '-j'], capture_output=True, text=True, env=env)
+    try:
+        runtimes = [x for x in json.loads(r.stdout)['runtimes'] if x.get('platform') == 'iOS' and x.get('isAvailable')]
+    except (ValueError, KeyError):
+        runtimes = []
+    major = sdk.split('.')[0]
+    match = [x for x in runtimes if str(x.get('version', '')).split('.')[0] == major]
+    if not match:
+        raise BuildError(f'the iOS {sdk or "?"} platform is not installed in Xcode: Xcode > Settings > Components > iOS '
+                         f'{sdk or ""} (Get), or run the command below; the IPA builds without it, but installing on a '
+                         'device needs it', ['xcodebuild -downloadPlatform iOS'])
+    return f'iOS {match[-1].get("version")} platform'
+
+
+IOS_REQUIREMENTS = [('Xcode 26 with the iOS SDK', req_ios_xcode, False), ('xcodegen and CMake', req_ios_tools, False),
+                    ('iOS platform (Xcode > Settings > Components)', req_ios_platform, False)]
 
 
 def prerequisites_ios():
@@ -1190,7 +1284,11 @@ def prerequisites_ios():
     py = prerequisites()
     developer, version = req_ios_xcode()
     tools = req_ios_tools()
-    say(f'iOS: Xcode {version} ({developer}), {tools}')
+    try:
+        platform_note = req_ios_platform()
+    except BuildError as e:   # the IPA builds without it; installing on a device needs it
+        platform_note = f'note: {e}'
+    say(f'iOS: Xcode {version} ({developer}), {tools}; {platform_note}')
     return py
 
 
@@ -1245,7 +1343,7 @@ def step_ipa(work, out, logs, args=None):
             '(games/xcx/ios/tools/build_ipa.py; the first time several minutes and network access)')
         caches = ios_seed_caches(work, (args.ios_seed_cache if args else None) or [])
         seed = [a for c in caches for a in ('--seed-cache', c)]
-        run([sys.executable, IOS / 'tools/build_ipa.py', '--work', work, '--out', out, '--logs', logs,
+        run([sys.executable, IOS / 'tools/build_ipa.py', '--work', work, '--out', out, '--logs', logs, '--version', VERSION,
              '--app-name', APP_NAME, '--bundle-id', app_bundle.BUNDLE_ID, *seed], logs / 'build-ipa.log',
             env=dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin')])))
         for line in (logs / 'build-ipa.log').read_text(errors='replace').splitlines():
@@ -1271,12 +1369,16 @@ PACKAGE_STEPS = dict(macos=['app: data bundle', 'app: assemble and sign', 'app: 
 
 def parse_args(argv):
     ap = argparse.ArgumentParser(
-        description=f'Build a native Mac app from your own {GAME_NAME} {DISPLAY}: an XCI holding the base game and the '
-                    f'update, or a base NSP with --update <the {DISPLAY} update NSP>.',
-        epilog='example: python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k personal/prod.keys')
+        description=f'Build a native Mac app from your own {GAME_NAME}, update 1.0.1 or 2.0.0: an XCI holding the base '
+                    f'game and the 1.0.1 update, optionally with --update <the 2.0.0 update NSP>, or a base NSP with '
+                    f'--update <the 1.0.1 or 2.0.0 update NSP>. The version built is the update\'s; building a newer '
+                    f'one to the same app updates it and keeps the saves.',
+        epilog='examples: python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k personal/prod.keys'
+               '  (1.0.1);  add --update personal/xcx200.nsp for 2.0.0')
     ap.add_argument('game', type=Path, help='the game file: an XCI holding base v0 and update 1.0.1, or the base game NSP / XCI')
     ap.add_argument('-k', '--keys', type=Path, required=True, help='your prod.keys')
-    ap.add_argument('--update', type=Path, help=f'the {DISPLAY} update NSP (not needed for an XCI that holds it)')
+    ap.add_argument('--update', type=Path, help='an update NSP, 1.0.1 or 2.0.0 (with an XCI: only for 2.0.0, which then '
+                                                'wins over the 1.0.1 update inside it)')
     ap.add_argument('--firmware', type=Path, help='folder of your firmware\'s NCA files, for the system shared fonts '
                                                    '(needed for an NSP; an XCI carries them in its system update)')
     ap.add_argument('--title-keys', type=Path, help='your title.keys, for NSPs without a common ticket')
@@ -1305,6 +1407,9 @@ def add_window_options(ap):
                          'stderr, for the window; SIGTERM then cancels cleanly')
     ap.add_argument('--check-requirements', action='store_true',
                     help='check this Mac\'s requirements for --platform (all of them, with what to do) and exit')
+    ap.add_argument('--identify', action='store_true',
+                    help='only report what the game file and --update are (base, update version) and the version of '
+                         'the app at -o, then exit (needs -k; with --progress json: one "identified" event a file)')
 
 
 def parse_mode(argv):
@@ -1314,6 +1419,7 @@ def parse_mode(argv):
     ap.add_argument('--progress', default='text')
     ap.add_argument('--gui', action='store_true')
     ap.add_argument('--check-requirements', action='store_true')
+    ap.add_argument('--identify', action='store_true')
     mode = ap.parse_known_args(argv)[0]
     if mode.check_requirements and (mode.platform not in PLATFORMS or mode.progress not in ('text', 'json')):
         parse_args(argv)   # reports the wrong value
@@ -1380,12 +1486,17 @@ def main(argv):
     if mode.check_requirements:
         return 0 if check_requirements(mode.platform) else 1
     args = parse_args(argv)
-    emit('plan', platform=args.platform,
+    if args.identify:
+        return identify_only(args)
+    # the version is the update's, known once identify has read the files: the plan lists the supported ones, and the
+    # start event (after identify) names the one being built
+    emit('plan', platform=args.platform, versions=[dict(version=v, display=row['display'],
+                                                        update_version=row['update_version'])
+                                                   for v, row in app_bundle.VERSIONS.items()],
          steps=STEPS + PACKAGE_STEPS[args.platform] + (['delete work folder'] if args.delete_work else []))
     with timed('inputs', record=False) as t:
         t['built'] = 'checked'
         plat, out, work, kind = check_inputs(args)
-    emit('start', platform=args.platform, game=str(args.game), out=str(out), work=str(work))
     with timed('requirements', record=False) as t:
         t['built'] = 'checked'
         logs = requirements(args, plat, out, work)
@@ -1410,9 +1521,8 @@ def check_inputs(args):
         if args.update == args.game:
             raise BuildError('--update is the game file itself: an XCI that holds the update needs no --update')
         if input_kind(args.update) != 'nsp':
-            raise BuildError(f'--update must be the {DISPLAY} update NSP: {args.update.name}')
-    if kind == 'nsp' and not args.update:
-        raise BuildError(f'{args.game.name} is an NSP: a base NSP needs the {DISPLAY} update, --update <update.nsp>')
+            raise BuildError(f'--update must be an update NSP (1.0.1 or 2.0.0): {args.update.name}')
+    # an NSP without --update is named by identify (a base-only NSP needs an update; an update NSP is not the game file)
     out = args.out.expanduser().resolve() if args.out else args.game.parent / f'{APP_NAME}{plat["output_suffix"]}'
     if out.suffix != plat['output_suffix']:
         raise BuildError(f'the {args.platform} output must end in {plat["output_suffix"]}: {out}')
@@ -1438,16 +1548,67 @@ def requirements(args, plat, out, work):
     logs = work / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     say(f'work folder {work} ({free_gb(work):.0f} GB free on its volume)')
-    romfs_done = (work / f'{app_bundle.ROMFS}/romfs.bin').is_file()
+    return logs
+
+
+def check_space(args, out, work):
+    """Free space for the version being built (after identify): its RomFS image, unless already merged."""
+    romfs_done = (work / f'{app_bundle.romfs(VERSION)}/romfs.bin').is_file()
     need = 3 if romfs_done else EXPECTED['romfs']['size'] / GB + 3
     if free_gb(work) < need:
-        raise BuildError(f'needs about {need:.0f} GB free for the work folder ({free_gb(work):.1f} GB free); the app '
-                         'itself is an APFS clone of it when on the same volume')
+        raise BuildError(f'needs about {need:.0f} GB free for the work folder ({free_gb(work):.1f} GB free): the '
+                         f'{DISPLAY} RomFS image takes 14.3 GB (each version has its own, in extracted/<version>/romfs); '
+                         'the app itself is an APFS clone of it when on the same volume')
     if args.platform == 'macos' and os.stat(existing(out.parent)).st_dev != os.stat(existing(work)).st_dev and \
             free_gb(out.parent) < EXPECTED['romfs']['size'] / GB + 1:
         raise BuildError(f'{out.parent} is on another volume than the work folder, so the app is a full copy there '
                          f'(about 15 GB); it has {free_gb(out.parent):.1f} GB free')
-    return logs
+
+
+def profile_folder():
+    return Path.home() / app_bundle.PROFILE
+
+
+def has_saves(profile):
+    return (profile / 'save').is_dir() and any(p.is_file() for p in (profile / 'save').rglob('*'))
+
+
+def backup_command(profile, installed):
+    """The command that copies the profile (saves) aside, named after the version that wrote it: the installed app's
+    when the build replaces it with another version, else just 'saves'."""
+    stamp = time.strftime('%Y-%m-%d')
+    label = installed[1] if installed and installed[0] != VERSION else 'saves'
+    return f'cp -R "{profile}" "{profile.parent / f"profile-{label}-backup-{stamp}"}"'
+
+
+def update_notice(args, out):
+    """What replacing the app at `out` means for the player, said before the long steps: the version it replaces, that
+    the saves stay (they are in the user's Library, not in the app), and the one-way save warning for 2.0.0. Returns
+    the installed app's version (folder, display) or None."""
+    installed = app_bundle.app_version(out) if args.platform == 'macos' and out.is_dir() else None
+    profile = profile_folder()
+    saves = has_saves(profile)
+    command = backup_command(profile, installed)
+    if installed and installed[0] != VERSION:
+        newer = version_order(VERSION) > version_order(installed[0])
+        say(f'{"updating" if newer else "replacing"} the app {out}: {installed[1]} -> {DISPLAY}. The app is replaced; '
+            f'the saves are not in it ({profile}), so {DISPLAY} continues from them.')
+        if newer and saves:
+            say(f'SAVES: once {DISPLAY} has loaded and saved a game, that save may not load in {installed[1]} again. '
+                f'To be able to go back, copy the profile before the first start of {DISPLAY}:')
+            say(f'   {command}')
+        elif not newer and saves:
+            say(f'SAVES: the profile may hold saves written by {installed[1]}, which {DISPLAY} may not read. If you made '
+                f'a backup of the profile before updating, restore it before playing {DISPLAY} (move the current '
+                f'profile aside first).')
+    elif installed:
+        say(f'rebuilding the {DISPLAY} app {out}; the saves ({profile}) are not touched')
+    elif out.exists() and args.platform == 'macos':
+        say(f'replacing {out} (its version is not known); the saves ({profile}) are not touched')
+    if VERSION != app_bundle.DEFAULT_VERSION and saves and not (installed and installed[0] != VERSION):
+        say(f'SAVES: a save that {DISPLAY} has loaded and saved may not load in 1.0.1 again; to keep a way back, copy '
+            f'the profile first: {command}')
+    return installed, saves, command
 
 
 def build_all(args, plat, out, work, logs, t0):
@@ -1456,8 +1617,14 @@ def build_all(args, plat, out, work, logs, t0):
     with timed('setup: Python environment') as t:
         vpy, t['built'] = prepare_venv(work, py, logs)
     with timed('identify') as t:
-        update_source = identify(vpy, logs, args.game, args.update, args.keys, args.title_keys)
+        update_source, _ = identify(vpy, logs, args.game, args.update, args.keys, args.title_keys)
+        check_space(args, out, work)
+        installed, saves, command = update_notice(args, out)
         t['built'] = 'checked'
+    emit('start', platform=args.platform, game=str(args.game), update=str(args.update) if args.update else None,
+         update_source=str(update_source), out=str(out), work=str(work), version=VERSION, display=DISPLAY,
+         installed=dict(version=installed[0], display=installed[1]) if installed else None,
+         profile=str(profile_folder()), saves=saves, backup_command=command if saves else None)
     build = Build(args, work, vpy, logs, env)
     build.step_code(update_source)
     build.step_fonts()
@@ -1472,26 +1639,83 @@ def build_all(args, plat, out, work, logs, t0):
         say_times(work, total)
         if args.delete_work:
             delete_work(work, out, work_inputs(args), 'ios')
-        say(f'done in {total / 60:.1f} min: {out}')
-        emit('done', platform='ios', out=str(out), work=str(work), seconds=round(total, 1))
+        say(f'done in {total / 60:.1f} min: {out} ({DISPLAY})')
+        emit('done', platform='ios', out=str(out), work=str(work), seconds=round(total, 1), version=VERSION, display=DISPLAY)
         say(IOS_EXPERIMENTAL)
         say('The IPA is unsigned: sign and install it with your own Apple ID (python3 games/xcx/ios/tools/install_device.py '
-            f'"{out}" --device "<device name>" --game-data "{work / app_bundle.ROMFS / "romfs.bin"}") or with a sideloading '
-            'tool that keeps its entitlements. It holds no game image: install_device.py --game-data copies the 14.3 GB '
-            'RomFS once into the app\'s Documents/GameData, or drag romfs.bin onto the app in Finder (the device > Files). '
-            'Needs iOS / iPadOS 26 and an iPhone 14 or newer. The app holds the game code: keep it for your own use, never share it.')
+            f'"{out}" --device "<device name>" --game-data "{work / app_bundle.romfs(VERSION) / "romfs.bin"}") or with a '
+            'sideloading tool that keeps its entitlements. It holds no game image: install_device.py --game-data copies the '
+            '14.3 GB RomFS once into the app\'s Documents/GameData, or drag romfs.bin onto the app in Finder (the device > '
+            'Files). Needs iOS / iPadOS 26 and an iPhone 14 or newer. The app holds the game code: keep it for your own use, '
+            'never share it.')
         return
     plat['package'](work, out, logs)
     total = time.time() - t0
     say_times(work, total)
     if args.delete_work:
         delete_work(work, out, work_inputs(args), 'macos')
-    say(f'done in {total / 60:.1f} min: {out}')
-    emit('done', platform='macos', out=str(out), work=str(work), seconds=round(total, 1))
+    updated = installed and installed[0] != VERSION
+    say(f'done in {total / 60:.1f} min: {out} ({DISPLAY}' + (f', was {installed[1]})' if updated else ')'))
+    emit('done', platform='macos', out=str(out), work=str(work), seconds=round(total, 1), version=VERSION, display=DISPLAY,
+         replaced=dict(version=installed[0], display=installed[1]) if updated else None)
     say('Open it from Finder (it may be moved, also to /Applications). Saves, the shader cache and the log go to '
         '~/Library/Application Support/MacNativeGames/XCX and ~/Library/Logs/MacNativeGames/xcx.log. The first start '
         'verifies the game data once (about 10 s) and keeps a record; shaders are translated as the game meets them '
         'and cached. The app holds the game: keep it for your own use, never share it.')
+    if updated and saves and version_order(VERSION) > version_order(installed[0]):
+        say(f'Updated from {installed[1]} to {DISPLAY}: the saves continue. Back them up before the first start if you '
+            f'may want {installed[1]} again: {command}')
+
+
+def identify_only(args):
+    """--identify: what the files are and the version of the app at the output, for the window (no build)."""
+    for name in ('game', 'keys', 'update'):
+        path = getattr(args, name)
+        if path is not None:
+            setattr(args, name, path.expanduser().resolve())
+    work = args.work.expanduser().resolve() if args.work else REPO / WORK_NAME
+    out = args.out.expanduser().resolve() if args.out else args.game.parent / f'{APP_NAME}.app'
+    installed = app_bundle.app_version(out) if out.suffix == '.app' and out.is_dir() else None
+    emit('identified', role='output', file=str(out), exists=out.exists(),
+         version=installed[0] if installed else None, display=installed[1] if installed else None)
+    files = [(role, path) for role, path in (('game', args.game), ('update', args.update)) if path is not None]
+    missing = [(role, path) for role, path in files if not path.is_file()]
+    for role, path in missing:
+        emit('identified', role=role, file=str(path), error='no such file')
+    files = [f for f in files if f not in missing]
+    if not files:
+        return 1 if missing else 0
+    if not args.keys or not args.keys.is_file():
+        for role, path in files:
+            emit('identified', role=role, file=str(path), error='choose prod.keys to read the version')
+        return 1
+    logs = work / 'logs'
+    logs.mkdir(parents=True, exist_ok=True)
+    vpy, _ = prepare_venv(work, req_python(), logs)
+    try:
+        reports = read_reports(vpy, logs, [p for _, p in files], args.keys, 'identify-window.log')
+    except BuildError as e:
+        for role, path in files:
+            emit('identified', role=role, file=str(path), error=str(e).splitlines()[0])
+        return 1
+    for (role, path), r in zip(files, reports):
+        if 'error' in r:
+            emit('identified', role=role, file=str(path), error=r['error'])
+            say(f'{path.name}: {r["error"]}')
+            continue
+        base = any(m['type'] == 0x80 and m['title_id'] == BASE_TITLE for m in r['metas'])
+        patches = own_patches(r)
+        number = patches[0]['version'] if patches else None
+        version = app_bundle.by_update_version(number) if number is not None else None
+        other = None if base or patches else describe_titles(r)
+        emit('identified', role=role, file=str(path), container=r['container'], base=base, update_version=number,
+             version=version, display=app_bundle.display(version) if version else None,
+             supported=number is None or version is not None, other=other)
+        say(f'{path.name}: {r["container"].upper()}' + (', base v0' if base else '')
+            + (f', update {app_bundle.describe(number)}' + ('' if version else ' (not supported)') if number is not None else '')
+            + (f', {other}' if other else ''))
+    say(f'{out}: ' + (f'app {installed[1]}' if installed else 'an app of unknown version' if out.exists() else 'not built yet'))
+    return 0
 
 
 if __name__ == '__main__':

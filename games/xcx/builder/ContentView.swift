@@ -9,10 +9,12 @@ struct ContentView: View {
     @State private var showLegal = false
     @State private var showAdvanced = false
     @State private var showLog = false
+    @State private var showUpdate = false
 
     var body: some View {
         ScrollViewReader { proxy in
             form
+                .onAppear { TestHook.scrollTo = { id in proxy.scrollTo(id, anchor: .top) } }
                 .onChange(of: model.phase) { _, phase in
                     if case .failed = phase { showLog = true }
                     withAnimation {   // keep the steps, then the result, in view
@@ -35,20 +37,26 @@ struct ContentView: View {
                     Label(iosWarning, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.callout)
+                    Text("The output is an unsigned .ipa. It carries no game image: the 14 GB romfs.bin goes onto the "
+                         + "device once (Install below, or Finder's file sharing).")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Build Xenoblade Chronicles X from your own files")
             } footer: {
-                Text("Xenoblade Chronicles X: Definitive Edition, base game with the 1.0.1 update. The files are "
-                     + "recognised by what is inside them, not by their names.")
+                Text("Xenoblade Chronicles X: Definitive Edition, base game with update 1.0.1 or 2.0.0. The files are "
+                     + "recognised by what is inside them, not by their names. The version built is the update's.")
             }
 
             Section("Your files") {
-                FileRow(title: "Game file", detail: "XCI, or the base game NSP", field: .game, kind: .file)
-                if model.gameIsNSP || model.paths[.update] != nil {
-                    FileRow(title: "Update 1.0.1", detail: model.gameIsNSP ? "required for an NSP" : "only for a base NSP",
-                            field: .update, kind: .file, optional: !model.gameIsNSP)
-                }
+                FileRow(title: "Game file", detail: "XCI, or the base game NSP", field: .game, kind: .file,
+                        note: model.detected[.game])
+                FileRow(title: "Update", detail: model.updateRequired
+                            ? (model.gameIsNSP ? "required for an NSP: the 1.0.1 or 2.0.0 update NSP"
+                                               : "required: the game file holds only the base game; choose the 1.0.1 or 2.0.0 update NSP")
+                            : "optional: a newer update NSP (2.0.0) updates the game",
+                        field: .update, kind: .file, optional: !model.updateRequired, note: model.detected[.update])
+                VersionSummary()
                 FileRow(title: "prod.keys", detail: "from your own Switch", field: .keys, kind: .file)
                 FileRow(title: "title.keys", detail: "optional: NSPs without a common ticket", field: .titleKeys,
                         kind: .file, optional: true)
@@ -61,6 +69,7 @@ struct ContentView: View {
                 FileRow(title: model.platform == .macos ? "App" : "IPA", detail: "where the build is written",
                         field: .output, kind: .save, optional: true,
                         placeholder: model.defaultOutput?.path ?? "next to the game file")
+                UpdateWarning()
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
                     FileRow(title: "Work folder", detail: "keeps every step, so a rebuild takes seconds (about 16 GB)",
                             field: .work, kind: .folder, optional: true,
@@ -80,7 +89,7 @@ struct ContentView: View {
             RequirementsSection()
 
             Section {
-                BuildControls(showLegal: $showLegal)
+                BuildControls(showLegal: $showLegal, showUpdate: $showUpdate)
                 if !model.steps.isEmpty {
                     ForEach(model.steps) { StepRow(step: $0) }
                 }
@@ -93,13 +102,17 @@ struct ContentView: View {
             } footer: {
                 Color.clear.frame(height: 1).id("result")
             }
+
+            if model.platform == .ios { InstallSection().id("install") }
         }
         .formStyle(.grouped)
         .defaultScrollAnchor(.top)
-        .sheet(isPresented: $showLegal) { LegalSheet(isPresented: $showLegal) }
+        .sheet(isPresented: $showLegal) { LegalSheet(isPresented: $showLegal, showUpdate: $showUpdate) }
+        .sheet(isPresented: $showUpdate) { UpdateSheet(isPresented: $showUpdate) }
         .onAppear {
             TestHook.showLog = { showLog = true }
             TestHook.showNotice = { showLegal = true }
+            TestHook.showUpdate = { showUpdate = true }
             if model.requirementsState == .unknown { model.checkRequirements() }
         }
     }
@@ -117,6 +130,7 @@ struct FileRow: View {
     let kind: PickKind
     var optional = false
     var placeholder: String?
+    var note: Detected?
 
     var body: some View {
         LabeledContent {
@@ -141,6 +155,14 @@ struct FileRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
+                if model.paths[field] != nil, let note {
+                    Label(note.text, systemImage: note.problem ? "exclamationmark.triangle.fill"
+                                                               : note.version != nil ? "checkmark.seal.fill" : "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(note.problem ? .orange : note.version != nil ? .green : .secondary)
+                } else if model.paths[field] != nil, model.identifying, field == .game || field == .update {
+                    Text("reading the version…").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -252,26 +274,36 @@ struct CommandRow: View {
 struct BuildControls: View {
     @EnvironmentObject private var model: BuildModel
     @Binding var showLegal: Bool
+    @Binding var showUpdate: Bool
 
     var body: some View {
         HStack {
             if model.isRunning {
                 ProgressView().controlSize(.small)
-                Text(model.phase == .cancelling ? "Cancelling…" : "Building…").foregroundStyle(.secondary)
+                Text(model.phase == .cancelling ? "Cancelling…" : "Building\(model.building.map { " " + $0 } ?? "")…")
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel", role: .cancel) { model.cancel() }
                     .disabled(model.phase == .cancelling)
             } else {
                 Text(hint).font(.callout).foregroundStyle(.secondary)
                 Spacer()
-                Button(model.platform == .macos ? "Build App" : "Build IPA") {
-                    if model.legalAccepted { model.build() } else { showLegal = true }
+                Button(buildTitle) {
+                    if !model.legalAccepted { showLegal = true }
+                    else if model.updatesOlderApp || model.replacesNewerApp { showUpdate = true }
+                    else { model.build() }
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canBuild)
             }
         }
+    }
+
+    private var buildTitle: String {
+        let version = model.buildVersion.flatMap { versionDisplay[$0] }.map { " \($0)" } ?? ""
+        if model.updatesOlderApp { return "Update App to\(version)" }
+        return (model.platform == .macos ? "Build App" : "Build IPA") + version
     }
 
     private var hint: String {
@@ -409,6 +441,7 @@ struct LogView: View {
 struct LegalSheet: View {
     @EnvironmentObject private var model: BuildModel
     @Binding var isPresented: Bool
+    @Binding var showUpdate: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -427,7 +460,9 @@ struct LegalSheet: View {
                 Button("I Own the Game: Build") {
                     model.acceptLegal()
                     isPresented = false
-                    model.build()
+                    if model.updatesOlderApp || model.replacesNewerApp {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showUpdate = true }
+                    } else { model.build() }
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -435,6 +470,117 @@ struct LegalSheet: View {
         }
         .padding(24)
         .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: versions
+
+/// The version the chosen files build, and what it replaces at the output.
+struct VersionSummary: View {
+    @EnvironmentObject private var model: BuildModel
+
+    var body: some View {
+        if model.paths[.game] != nil, let version = model.buildVersion, let display = versionDisplay[version] {
+            let from = model.paths[.update] != nil ? "the update NSP (it wins over the update inside the game file)"
+                                                   : "the update inside the game file"
+            Label("Builds version \(display), from \(from).", systemImage: "shippingbox")
+                .font(.callout)
+        }
+    }
+}
+
+/// Shown when building replaces an app of another version: what happens to the saves.
+struct UpdateWarning: View {
+    @EnvironmentObject private var model: BuildModel
+
+    var body: some View {
+        if let installed = model.installed, model.platform == .macos {
+            let new = model.buildVersion.flatMap { versionDisplay[$0] }
+            if model.updatesOlderApp, let new {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("This updates the app there from \(installed.display) to \(new).", systemImage: "arrow.up.circle.fill")
+                        .foregroundStyle(.blue).bold()
+                    Text("The app is replaced. Your saves stay: they are in "
+                         + "~/Library/Application Support/MacNativeGames/XCX/profile, not in the app, and \(new) continues "
+                         + "from them. Once \(new) has saved, that save may not load in \(installed.display) again, so "
+                         + "back the saves up first if you may want to go back.")
+                        .font(.callout)
+                    BackupRow()
+                }
+                .padding(.vertical, 2)
+            } else if model.replacesNewerApp, let new {
+                Label("This replaces the \(installed.display) app there with \(new). Saves written by \(installed.display) "
+                      + "may not load in \(new): restore a backup of the profile first if you made one.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange).font(.callout)
+            } else {
+                Text("The app there is version \(installed.display); building replaces it, and the saves are kept.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct BackupRow: View {
+    @EnvironmentObject private var model: BuildModel
+
+    var body: some View {
+        HStack {
+            Button("Back Up Saves Now") { _ = model.backupSaves() }
+                .disabled(!model.hasSaves || model.isRunning)
+            if let message = model.backupMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+            } else if !model.hasSaves {
+                Text("No saves yet.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Asked before a build replaces an app of another version, so the save warning is seen before anything changes.
+struct UpdateSheet: View {
+    @EnvironmentObject private var model: BuildModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        let old = model.installed?.display ?? "?"
+        let new = model.buildVersion.flatMap { versionDisplay[$0] } ?? "?"
+        VStack(alignment: .leading, spacing: 12) {
+            Label(model.updatesOlderApp ? "Update to \(new)?" : "Go back to \(new)?",
+                  systemImage: model.updatesOlderApp ? "arrow.up.circle.fill" : "arrow.uturn.backward.circle.fill")
+                .font(.title2).bold()
+            Text("The app at \((model.output?.path ?? "") as NSString) is version \(old). Building replaces it with \(new).")
+            if model.updatesOlderApp {
+                Text(LocalizedStringKey("Your saves are kept: they are not in the app. **Once \(new) has saved, the save "
+                     + "may not load in \(old) again.** A backup copies them to "
+                     + "~/Library/Application Support/MacNativeGames/XCX/profile-\(old)-backup-<date>."))
+            } else {
+                Text("The saves may have been written by \(old), which \(new) may not read. If you backed the profile up "
+                     + "before updating, put that backup back first.")
+            }
+            if let message = model.backupMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { isPresented = false }
+                Button(model.updatesOlderApp ? "Build Without Backup" : "Build") {
+                    isPresented = false
+                    model.build()
+                }
+                if model.updatesOlderApp {
+                    Button("Back Up Saves and Build") {
+                        if !model.hasSaves || model.backupSaves() {
+                            isPresented = false
+                            model.build()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
         .fixedSize(horizontal: false, vertical: true)
     }
 }

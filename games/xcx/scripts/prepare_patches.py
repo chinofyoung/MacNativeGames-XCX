@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Turn the player's 1.0.1 exefs patches (IPSwitch .pchtxt, e.g. from mods/1.0.1/<name>/exefs/) into checked patch tables.
+"""Turn the player's exefs patches (IPSwitch .pchtxt, from mods/<display version>/<name>/exefs/, e.g. mods/1.0.1/...)
+into checked patch tables for one game version (--version v101, the default, or v200).
 
-Each patch must name main's build ID and touch only bytes the Apple-silicon rewrite left as they were (a rewritten word
+Each patch must name main's build ID of that version (1.0.1 and 2.0.0 differ, so a patch made for one does not apply to
+the other) and touch only bytes the Apple-silicon rewrite left as they were (a rewritten word
 would be a branch into a rewrite block). Offsets are main image offsets (the files' `@flag offset_shift 0x100` is for the
 IPS container). Writes <work>/patches/<slug>.tsv ("offset new-bytes original-bytes" in hex) and <work>/patches/index.tsv;
 the runtime (runtime/game_patches.c) checks the original bytes again before writing. No game bytes come from the files
@@ -15,20 +17,20 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE / 'third_party/d2r'))   # this folder's own copy of the rewriter
+sys.path.insert(0, str(HERE / 'scripts'))
 import nsoimg
-
-EXPECTED = json.loads((HERE / 'assets/expected-v1.0.1.json').read_text())
+import app_bundle   # the version table
 
 
 def slug(name):
     return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
 
 
-def parse(path, build_id):
+def parse(path, build_id, shown):
     text = path.read_text(errors='replace').splitlines()
     ids = [l.split('-', 1)[1].strip().upper() for l in text if l.startswith('@nsobid-')]
     if ids != [build_id]:
-        raise ValueError(f'{path}: build ID {ids} is not main 1.0.1 ({build_id})')
+        raise ValueError(f'{path}: build ID {ids} is not main {shown} ({build_id})')
     patches, enabled = [], False
     for n, line in enumerate(text, 1):
         line = line.split('//', 1)[0].strip()
@@ -45,17 +47,21 @@ def parse(path, build_id):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mods', type=Path, nargs='?', default=HERE / 'mods/1.0.1', help='folder of <name>/exefs/*.pchtxt')
+    parser.add_argument('mods', type=Path, nargs='?', help='folder of <name>/exefs/*.pchtxt (default: mods/<display version>)')
     parser.add_argument('--work', type=Path, default=HERE.parents[1] / 'XCX_build')   # <repository root>/XCX_build
+    parser.add_argument('--version', default=app_bundle.DEFAULT_VERSION, choices=list(app_bundle.VERSIONS))
     args = parser.parse_args()
     work = args.work.resolve()
-    original = nsoimg.load(work / 'extracted/v101/exefs/main')
-    rewritten = (work / 'rewritten/v101/main.patched.bin').read_bytes()
+    v, shown = args.version, app_bundle.display(args.version)
+    expected = app_bundle.expected(v)
+    mods = args.mods or HERE / f'mods/{shown}'
+    original = nsoimg.load(work / f'extracted/{v}/exefs/main')
+    rewritten = (work / f'rewritten/{v}/main.patched.bin').read_bytes()
     out = work / 'patches'; out.mkdir(exist_ok=True)
     index = []
-    for f in sorted(args.mods.glob('*/exefs/*.pchtxt')):
+    for f in sorted(mods.glob('*/exefs/*.pchtxt')):
         name = f.parents[1].name
-        patches = parse(f, EXPECTED['main_build_id'])
+        patches = parse(f, expected['main_build_id'], shown)
         rows = []
         for off, new, line in patches:
             end = off + len(new)

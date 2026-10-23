@@ -23,13 +23,26 @@ repository root: `build_app.py` (and its window) use it by default, and the comm
 
 ## Inputs
 
+Two versions are supported, side by side: update **1.0.1** (`v101`, Patch meta v65536) and **2.0.0** (`v200`,
+v196608). The table is `scripts/app_bundle.py` `VERSIONS`; each version has its pins in
+`assets/expected-<display>.json`, its folders in the work folder (`extracted/<v>`, `rewritten/<v>`,
+`cache/verify_<v>`, `build/<v>/`, `build/xcx-native-<v>`, `build/launcher-<v>`, `build/data-bundles/GameData-<v>.bundle`)
+and its compile-time define (`runtime/game_version.h`, `make VERSION=v200` passes `-DXCX_GAME_V200`). The version built
+is the update's. 2.0.0 is cumulative over v0: its BKTR maps every byte to the base or its own data, never to 1.0.1.
+
 - One XCI holding base `0100453019AA8000` (v0) and update 1.0.1 `0100453019AA8800` (v65536) with its common ticket.
   `title.keys` is not needed: the base Program NCA uses the key area and the update's title key comes from that ticket.
 - Or the base from a base NSP (or a base-only XCI) and the update from its own NSP: `extract_code.py` and
   `merge_romfs.py` take `--update <update.nsp>`, and `--title-keys <title.keys>` for an NSP without a common ticket (a
   personalized ticket is then passed over). NSPs carry no system update, so the fonts come from `--firmware`.
 - Both Program NCAs carry the base title ID. The scripts choose each one through its content meta: the Application
-  meta names the base Program, the Patch meta 1.0.1 names the update Program.
+  meta names the base Program, the Patch meta names the update Program (a supported version; `--version <v>` requires
+  one).
+- For 2.0.0: the same XCI (or a base NSP) with `--update <the 2.0.0 NSP> --version v200`. The 2.0.0 NSP carries its
+  common ticket. Its AES-CTR-Ex table ends at the indirect table instead of at itself, as 1.0.1's does; the indirect
+  table is then plain AES-CTR with the section's own generation. `merge_romfs.Patched` accepts both layouts and records
+  which (`aes_ctr_ex_covers` in `index.json`). 2.0.0's merged image is 14,331,812,280 bytes (`31afb6d9…`), 87.4 MB from
+  the update. `romfs_control.py --update <nsp> --version v200` repeats the byte-flip control.
 - The base is complete (not sparse, not compressed), unlike Bayonetta 3's. The code comes from the update, whose RomFS
   is a BKTR patch over the base: 79.8 MB of the merged image come from the update, 14.28 GB from the base.
 
@@ -81,13 +94,16 @@ After stage 1, from `games/xcx`, with the same `WORK` and `PY`:
 # System fonts (the game's partitions have none): from the system update the XCI carries (or --firmware <NCA folder>)
 $PY scripts/extract_shared_fonts.py --keys $KEYS --xci "$XCI" --output $WORK/extracted/firmware/shared-fonts
 make prepare WORK=$WORK PY=$PY       # tables, RomFS index, fonts config; every input checked against assets/expected-v1.0.1.json
-make runtime WORK=$WORK              # $WORK/build/xcx-native
+make runtime WORK=$WORK              # $WORK/build/xcx-native-v101
 make shader-tools WORK=$WORK         # the shader translator and SPIRV-Cross the graphics layer starts on first use
 cd $WORK
-./build/xcx-native rewritten/v101 probe                                   # three modules, cross-module calls
-TOTK_HEADLESS=1 TOTK_VERIFY_STARTUP=1 ./build/xcx-native rewritten/v101 boot   # to nnMain and on until a window is needed
-TOTK_GPU_ALLOW_SUBMIT=1 ./build/xcx-native rewritten/v101 boot 2> logs/boot.log # with a window: the title screen
+./build/xcx-native-v101 rewritten/v101 probe                                   # three modules, cross-module calls
+TOTK_HEADLESS=1 TOTK_VERIFY_STARTUP=1 ./build/xcx-native-v101 rewritten/v101 boot   # to nnMain and on until a window is needed
+TOTK_GPU_ALLOW_SUBMIT=1 ./build/xcx-native-v101 rewritten/v101 boot 2> logs/boot.log # with a window: the title screen
 ```
+
+For 2.0.0: `make prepare runtime VERSION=v200 ...` and `./build/xcx-native-v200 rewritten/v200 ...`. Set
+`TOTK_PROFILE_DIR=<a copy>` for a terminal run that must not touch the profile it would otherwise use (`user-data/`).
 
 The run is from the work folder: `extracted/`, `rewritten/`, `build/` and the profile (`user-data/`: account, saves,
 pseudo device id) are relative to it. `make boot` does the same and writes `logs/boot.log`. Keyboard (Bayonetta 3's map): J = A, K or Space
@@ -114,11 +130,11 @@ Two kinds of app share one launcher (`app/launcher.m`) and one bundle descriptio
 identifier, Info.plist and the files a self-contained app carries).
 
 **Self-contained (`build_app.py` at the repository root).** The game folder is inside the app,
-`Contents/Resources/xcx`, laid out like a work folder: `build/xcx-native`, the shader tools
-(`build/spirv-cross/spirv-cross`, `build/shader-service/totk_xlate`), `rewritten/v101/*.patched.bin`,
-`extracted/v101/romfs/runtime-index.bin` and `extracted/firmware/shared-fonts`. The 14.3 GB `romfs.bin` is a data
-bundle, `Contents/Helpers/GameData-v101.bundle`, signed once in the work folder (`build/data-bundles`) and cloned in;
-`extracted/v101/romfs/romfs.bin` is a link to it. Everything is an APFS clone of the work folder's files, so the app
+`Contents/Resources/xcx`, laid out like a work folder: `build/xcx-native` (the work folder's `build/xcx-native-<v>`), the shader tools
+(`build/spirv-cross/spirv-cross`, `build/shader-service/totk_xlate`), `rewritten/<v>/*.patched.bin`,
+`extracted/<v>/romfs/runtime-index.bin` and `extracted/firmware/shared-fonts`. The 14.3 GB `romfs.bin` is a data
+bundle, `Contents/Helpers/GameData-<v>.bundle`, signed once in the work folder (`build/data-bundles`) and cloned in;
+`extracted/<v>/romfs/romfs.bin` is a link to it. Everything is an APFS clone of the work folder's files, so the app
 costs no extra space on the same volume, and it no longer needs the work folder. The launcher runs in this mode when
 `Contents/Resources/xcx/build/xcx-native` is there (and `XCX_WORK` is not set). Everything the game writes goes to the
 user's Library, so the signed bundle stays read-only:
@@ -156,7 +172,7 @@ mod, FPS overlay; no frame-rate or internal-resolution setting, as no patch for 
 the switches the terminal runs set by hand
 (`TOTK_GPU_ALLOW_SUBMIT=1` and the rest), the game's own 30 fps, the compact HUD, MetalFX upscaling and frame
 interpolation off (key 2 still toggles interpolation; on an M1 it costs real frames). The development app does not hold
-the game: it runs `build/xcx-native` from the work folder it names in its Info.plist, so the work folder must stay
+the game: it runs `build/xcx-native-<v>` from the work folder it names in its Info.plist, so the work folder must stay
 where it was when the app was built.
 
 - Progress: `~/Library/Application Support/MacNativeGames/XCX/profile` (account, saves, pseudo device id, pipeline
@@ -167,7 +183,8 @@ where it was when the app was built.
   RomFS image is). Commands for the running game (`shot <path>.png`, `close`, ...) can be appended to
   `~/Library/Application Support/MacNativeGames/XCX/input.txt`; `open --env XCX_PLAY=1 <app>` skips the settings window,
   and `--env TOTK_SLOT_OWNER=<name>` marks a scripted run so that a game the user starts takes the game slot over.
-- Player exefs patches (`make patches`: `mods/1.0.1/<name>/exefs/*.pchtxt` -> `$WORK/patches/<slug>.tsv`) have no
+- Player exefs patches (`make patches VERSION=<v>`: `mods/<1.0.1 | 2.0.0>/<name>/exefs/*.pchtxt`, for that version's
+  main build ID, -> `$WORK/patches/<slug>.tsv`) have no
   setting in the window: `open --env XCX_PATCHES=<slug>,<slug> <app>` passes them to the runtime
   (`runtime/game_patches.c`), which checks every site before writing it. None are known for this game yet.
 
@@ -200,7 +217,7 @@ to draw.
 `ios/` holds the iOS app, restored from the original project's `games/totk/ios` and adapted for this game.
 `build_app.py --platform ios` runs `ios/tools/build_ipa.py` after the shared steps. It works like this:
 
-1. The Mac runtime exports each module's patched text (`build/xcx-native rewritten/v101 export-ios`, `runtime/loader.c`).
+1. The Mac runtime exports each module's patched text (`build/xcx-native-<v> rewritten/<v> export-ios`, `runtime/loader.c`).
 2. `ios/tools/gen_embed.py` places the text, data and patch area of `main`, `sdk` and `subsdk0` in the executable's own
    segments (`__TOTKX` r-x, `__TOTK<module>W` rw), bound by SHA-256 in `ios_embed.h`. iOS cannot run code written at
    run time, so the loader remaps these segments instead (`TARGET_OS_IPHONE` in `loader.c`).

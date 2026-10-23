@@ -2,7 +2,8 @@
 """Build an unsigned, sideloadable iPhone / iPad IPA of Xenoblade Chronicles X from a prepared work folder. EXPERIMENTAL.
 
 Restored from the original project's games/totk/ios/tools/build_ipa.py and adapted for this port: the work folder is the
-one build_app.py (or the Makefile) made, with the Mac runtime built (build/xcx-native, used once to export the patched
+one build_app.py (or the Makefile) made, with the Mac runtime of the version built (build/xcx-native-<v>, --version
+v101 or v200; used once to export the patched
 code), and everything generated goes under <work>/build/ios-<sdk> (the Xcode project, its DerivedData, the device
 libraries, the shader seed), never into the source tree.
 
@@ -134,27 +135,30 @@ def main():
     p.add_argument('--logs', type=Path, required=True)
     p.add_argument('--app-name', default=app_bundle.APP_NAME)
     p.add_argument('--bundle-id', default=app_bundle.BUNDLE_ID)
+    p.add_argument('--version', default=app_bundle.DEFAULT_VERSION, choices=list(app_bundle.VERSIONS),
+                   help='the game version to package (v101 = 1.0.1, the default; v200 = 2.0.0)')
     p.add_argument('--seed-cache', type=Path, action='append', default=[],
                    help='a Mac shader cache folder (rt-<chain>) whose translated variants the app carries; repeatable')
     a = p.parse_args()
     work = a.work.resolve(); logs = a.logs.resolve(); out = a.out.resolve()
     if out.suffix.lower() not in ('.ipa', '.app'): raise RuntimeError('the iOS output must end in .ipa (or .app: the unsigned folder)')
     a.sdk = 'iphoneos'   # a device build only (see above)
-    version = app_bundle.VERSION
+    version = a.version
     root = work / 'build/ios'; gen = root / 'Gen'
     env = dict(os.environ, DEVELOPER_DIR=developer_dir())
     for k in ('XCX_PATCHES',): env.pop(k, None)   # the exported code carries no optional patch
     subprocess.run(['xcrun', '--sdk', a.sdk, '--show-sdk-path'], env=env, check=True, capture_output=True)
     if not shutil.which('xcodegen'): raise RuntimeError('install xcodegen: brew install xcodegen')
     gen.mkdir(parents=True, exist_ok=True)
+    generated = work / app_bundle.generated(version)
     for name in ('runtime_tables.h', 'romfs_config.h', 'shared_fonts_config.h'):
-        if not (work / 'build' / name).is_file(): raise RuntimeError(f'missing {work / "build" / name}: run make prepare')
-        clone(work / 'build' / name, gen / name)
+        if not (generated / name).is_file(): raise RuntimeError(f'missing {generated / name}: run make prepare VERSION={version}')
+        clone(generated / name, gen / name)
 
     # 1. The code: the Mac runtime exports each module's text after its patches (runtime/loader.c export-ios); gen_embed.py
     #    puts text, data and patch area into the executable's segments and binds them by SHA-256 (ios_embed.h).
-    host = work / 'build/xcx-native'; rewritten = work / f'rewritten/{version}'
-    if not host.is_file(): raise RuntimeError(f'missing {host}: build the Mac runtime first (make runtime)')
+    host = work / app_bundle.binary(version); rewritten = work / f'rewritten/{version}'
+    if not host.is_file(): raise RuntimeError(f'missing {host}: build the Mac runtime first (make runtime VERSION={version})')
     modules = gen / 'modules'; shutil.rmtree(modules, ignore_errors=True); modules.mkdir()
     run([host, rewritten, 'export-ios'], work, logs / 'export-ios.log', dict(env, TOTK_EXPORT_IOS=str(modules), TOTK_HEADLESS='1'))
     flags = subprocess.check_output([sys.executable, TOOLS / 'gen_embed.py', rewritten, gen / 'embed.S', '--text-dir', modules,
@@ -185,9 +189,10 @@ def main():
     ldflags = ' '.join('-framework ' + x for x in FRAMEWORKS)
     (gen / 'xcx.xcconfig').write_text(f'OTHER_LDFLAGS = $(inherited) {ldflags} {q(deps / "lib/libopus.a")} {q(deps / "lib/libvpx.a")} {flags}\n')
     shutil.rmtree(gen / 'deps', ignore_errors=True); shutil.copytree(deps / 'include', gen / 'deps/include')
-    info = app_bundle.EXPECTED
+    info = app_bundle.expected(version)
     env.update(XCX_SRC=str(GAME), XCX_GEN=str(gen), XCX_APP_NAME=a.app_name, XCX_BUNDLE_ID=a.bundle_id, XCX_DEPLOYMENT=DEPLOYMENT,
                XCX_SDK=a.sdk, XCX_VERSION=info['display_version'], XCX_BUILD=str(info['version'] + 1),
+               XCX_VERSION_FLAGS=f'-DXCX_GAME_{version.upper()}',
                XCX_CPU_FLAGS='-mcpu=apple-a15')   # iPhone 14 and newer (A15 and later), as the original project
     run(['xcodegen', 'generate', '--spec', root / 'project.yml', '--project', root], root, logs / f'xcodegen-{a.sdk}.log', env)
     # -target and -sdk instead of -destination: a destination needs the iOS platform component downloaded in Xcode
@@ -203,7 +208,7 @@ def main():
     # 6. The game data the app carries (GameData, read by ios/Sources/main.m); the RomFS image is installed separately.
     res = app / 'GameData'
     shutil.rmtree(res, ignore_errors=True)
-    clone(work / f'{app_bundle.ROMFS}/runtime-index.bin', res / 'romfs/runtime-index.bin')
+    clone(work / f'{app_bundle.romfs(version)}/runtime-index.bin', res / 'romfs/runtime-index.bin')
     copy_tree(work / app_bundle.SHARED_FONTS, res / 'shared-fonts')
     (res / 'shader-seed').mkdir(parents=True)
     if count: copy_tree(seed, res / 'shader-seed')

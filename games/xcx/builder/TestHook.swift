@@ -2,14 +2,16 @@
 // have). Used only when XCX_BUILDER_TEST_GAME or _COMMANDS is set (build_app.py --gui passes XCX_BUILDER_TEST_* on):
 //   XCX_BUILDER_TEST_GAME, _UPDATE, _FIRMWARE, _KEYS, _TITLE_KEYS, _OUT, _WORK  the fields (paths)
 //   XCX_BUILDER_TEST_PLATFORM      macos | ios
+//   XCX_BUILDER_TEST_NO_TEAM=1     the install section behaves as if no Apple Development certificate existed
 //   XCX_BUILDER_TEST_DELETE_WORK=1 turn on "Delete the work folder when the build finishes" for this run only
 //   XCX_BUILDER_TEST_BUILD=1       accept the notice for this run only and start the build once the check passes
 //   XCX_BUILDER_TEST_CANCEL_AT=<step name>  press Cancel when that step starts
 //   XCX_BUILDER_TEST_STATUS=<file> write the window's state as JSON (window number, phase, steps) on every change
 //   XCX_BUILDER_TEST_COMMANDS=<file>  lines appended to it are run once each: "shot <path.png>" (the key window draws
 //                                  itself into a PNG, no screen recording permission needed), "log" (open the log),
-//                                  "notice" (show the notice sheet),
-//                                  "size <w> <h>", "build", "cancel", "quit"
+//                                  "notice" (show the notice sheet), "update" (show the update / save warning sheet),
+//                                  "size <w> <h>", "build", "cancel", "quit", "scroll <id>" (build | result |
+//                                  install), "devices" (look for devices again)
 // With _GAME (test mode) nothing is written to UserDefaults, so the remembered paths and notice stay as they were.
 import AppKit
 import Foundation
@@ -21,6 +23,7 @@ enum TestHook {
         if let commands = env["XCX_BUILDER_TEST_COMMANDS"] { watch(commands, model) }
         guard let game = env["XCX_BUILDER_TEST_GAME"] else { return }
         model.persist = false
+        InstallModel.shared.simulateNoTeam = env["XCX_BUILDER_TEST_NO_TEAM"] == "1"
         model.legalAccepted = env["XCX_BUILDER_TEST_BUILD"] == "1"
         for field in Field.allCases { model.set(field, nil) }
         if let raw = env["XCX_BUILDER_TEST_PLATFORM"], let p = Platform(rawValue: raw) { model.platform = p }
@@ -58,6 +61,8 @@ enum TestHook {
     static var commandsDone = 0
     static var showLog: (() -> Void)?
     static var showNotice: (() -> Void)?
+    static var showUpdate: (() -> Void)?
+    static var scrollTo: ((String) -> Void)?
 
     static func watch(_ path: String, _ model: BuildModel) {
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
@@ -83,6 +88,9 @@ enum TestHook {
             }
         case "log": showLog?()
         case "notice": showNotice?()
+        case "update": showUpdate?()
+        case "scroll": if parts.count == 2 { scrollTo?(parts[1]) }
+        case "devices": InstallModel.shared.refresh()
         case "build": model.build()
         case "cancel": model.cancel()
         case "quit": NSApp.terminate(nil)
@@ -136,6 +144,13 @@ enum TestHook {
             "requirements": "\(model.requirementsState)",
             "canBuild": model.canBuild,
             "deleteWork": model.deleteWork,
+            "detected": Dictionary(uniqueKeysWithValues: model.detected.map { ($0.key.rawValue, $0.value.text) }),
+            "buildVersion": model.buildVersion.map { $0 as Any } ?? NSNull(),
+            "installed": model.installed.map { $0.version as Any } ?? NSNull(),
+            "updatesOlderApp": model.updatesOlderApp,
+            "missing": model.missing,
+            "installTeams": InstallModel.shared.teams.map { $0 as Any } ?? NSNull(),
+            "installDevices": InstallModel.shared.devices.map { "\($0.name) — \($0.model)" },
             "workDeleted": model.workDeleted,
             "status": phase,
             "steps": model.steps.map {

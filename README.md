@@ -1,6 +1,7 @@
 # Xenoblade Chronicles X: Definitive Edition, native on Apple silicon
 
-An early, work-in-progress native Mac port of your own copy of **Xenoblade Chronicles X: Definitive Edition 1.0.1**.
+An early, work-in-progress native Mac port of your own copy of **Xenoblade Chronicles X: Definitive Edition**, update
+**1.0.1 or 2.0.0**.
 The port lives in [`games/xcx`](games/xcx).
 
 This repository is a fork of [MacNativeGames](https://github.com/ly05010419/MacNativeGames). It builds on that project's
@@ -33,7 +34,8 @@ Monolith Soft. Nintendo, Nintendo Switch and Xenoblade Chronicles are trademarks
 The repository contains no game content and distributes none: no game program, art, text, audio, shaders, keys or
 saves. Everything the game needs is made on your own Mac from your own files. What the repository does hold is the code
 of the port and the information needed to check your files (the hashes in
-[`games/xcx/assets/expected-v1.0.1.json`](games/xcx/assets/expected-v1.0.1.json)).
+[`games/xcx/assets/expected-v1.0.1.json`](games/xcx/assets/expected-v1.0.1.json) and
+[`expected-v2.0.0.json`](games/xcx/assets/expected-v2.0.0.json)).
 
 The app and the work folder you build hold or use the game, so they are for your own use only. **Never share the built
 app, the work folder or anything in it.**
@@ -73,10 +75,14 @@ The full work log, with what was found, what was changed and how each step was c
 - `git` (part of the command line tools): the build fetches SPIRV-Cross at a pinned commit. The first build also needs
   network access for the build's Python packages ([`games/xcx/requirements.txt`](games/xcx/requirements.txt), plus
   `unicorn` for the rewrite check `equiv.py`; Unicorn only checks the rewritten code and is not part of the port).
-- Your game, base `0100453019AA8000` (v0) and update 1.0.1 `0100453019AA8800` (v65536), as either
-  - one **XCI** holding both, as the game card does (this is what the port was tested with), or
-  - a base **NSP** (or a base-only XCI) and the 1.0.1 update NSP. NSPs are decrypted with their common ticket; for an
-    NSP without one, pass your `title.keys` (`--title-keys`).
+- Your game, base `0100453019AA8000` (v0) with its update `0100453019AA8800` in version **1.0.1** (v65536) or
+  **2.0.0** (v196608), as
+  - one **XCI** holding the base and 1.0.1, as the game card does: builds 1.0.1;
+  - that XCI plus the **2.0.0 update NSP** (`--update`): builds 2.0.0 (the update you give wins over the one inside the
+    XCI; 2.0.0 contains everything 1.0.1 changed, so 1.0.1 is not needed);
+  - or a base **NSP** (or a base-only XCI) plus the 1.0.1 or 2.0.0 update NSP. NSPs are decrypted with their common
+    ticket; for an NSP without one, pass your `title.keys` (`--title-keys`).
+  The version built is always the update's. Other versions are refused with a message naming the supported ones.
 - Your `prod.keys`.
 - The six Switch system fonts (`shared-fonts`). The game's own partitions do not carry them, but the XCI's system update
   does, and the build takes them from there. For NSPs, pass your firmware's NCA files with `--firmware <folder>`.
@@ -92,6 +98,27 @@ There is one work folder, `XCX_build/` at the repository root (next to `build_ap
 default of `build_app.py`, of the window and of the developer commands below, wherever the game file is, so every build
 reuses the same steps. The app goes next to the game file unless `-o` says otherwise.
 
+### Versions, updating and your saves
+
+1.0.1 and 2.0.0 can both be built from the same work folder: each version keeps its own `extracted/<v>`,
+`rewritten/<v>`, `build/<v>/` headers, `build/xcx-native-<v>` and game data bundle (`v101`, `v200`), so building
+either one again reuses its steps. The second version's game data takes another 14.3 GB.
+
+**To update**, build again with the newer update to the same app (the same `-o`, or the default next to the game file):
+
+```sh
+python3 build_app.py "personal/<game>.xci" -k personal/prod.keys --update personal/<2.0.0 update>.nsp
+```
+
+The app is replaced. **Your saves are not in the app** (they are in
+`~/Library/Application Support/MacNativeGames/XCX/profile`), so 2.0.0 continues from them; a 1.0.1 save loads in
+2.0.0. **The other direction is not guaranteed:** once 2.0.0 has saved, that save may not load in 1.0.1 again. The build
+says when it replaces an older app and prints the command that copies the profile aside, for example
+`cp -R ".../XCX/profile" ".../XCX/profile-1.0.1-backup-<date>"`; the window offers **Back Up Saves** before it builds.
+To go back to 1.0.1, rebuild without `--update` and put that backup back in place of `profile`. The app records its
+version (`CFBundleShortVersionString`, `XCXGameVersion` in its Info.plist; `--check` prints it). Exefs mods are per
+version (`mods/1.0.1/`, `mods/2.0.0/`): main's build ID differs.
+
 ### The window (easiest)
 
 From the repository root:
@@ -102,8 +129,14 @@ python3 build_app.py --gui
 
 This opens **Xenoblade Chronicles X Builder**, a small native window:
 
-- Choose your game file (the XCI, or a base NSP and then the 1.0.1 update NSP), your `prod.keys`, and optionally
-  `title.keys` and a firmware folder.
+- Choose your game file (the XCI, or a base NSP), your `prod.keys`, and optionally an update NSP, `title.keys` and
+  a firmware folder. Each file shows what it is, read from inside it (for example "XCI: base v0 + update 1.0.1",
+  "NSP: update 2.0.0"), and the window says which version the build makes. The update is optional for an XCI that holds
+  1.0.1: choosing the **2.0.0 update NSP** there **updates the game**. For a base NSP, or a file with no update inside,
+  the update is required. A file of the wrong kind (an update chosen as the game file, another game, an unsupported
+  version) is flagged and the build stays disabled.
+- When the output already holds an app of another version, the window says what replacing it means for the saves, and
+  building asks first (**Back Up Saves and Build**, **Build Without Backup**, **Cancel**).
 - The output defaults to `Xenoblade Chronicles X.app` next to the game file. Pick *iPhone and iPad (experimental)* to
   build the IPA instead (see below). *Advanced* chooses another work folder than `XCX_build/` at the repository root.
 - The *Prerequisites* panel checks this Mac and lists anything missing, with the command that installs it.
@@ -129,16 +162,18 @@ python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k
 This uses the work folder `XCX_build/` at the repository root and makes the app `personal/Xenoblade Chronicles X.app`
 (next to the game file); `--work <folder>` and `-o <path>.app` choose other places.
 
-For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.nsp> --firmware <firmware folder>`
-(add `--title-keys title.keys` for NSPs without a common ticket).
+For 2.0.0, add the update: `--update "personal/<2.0.0 update>.nsp"` (see [Versions](#versions-updating-and-your-saves)).
+For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <1.0.1 or 2.0.0 update.nsp> --firmware <firmware folder>`
+(add `--title-keys title.keys` for NSPs without a common ticket; the firmware folder is needed for the system fonts
+unless an earlier build already extracted them into the work folder).
 
 - `python3 build_app.py --help` lists every option. `python3 build_app.py --check-requirements` (add `--platform ios`
   for the IPA) checks this Mac without building anything and prints a fix for anything missing.
 - The build checks the Mac first (macOS version, Apple silicon, the developer tools, Homebrew's `opus` and `libvpx`,
   Python 3.14), then recognises the game by the title IDs and versions inside the files, never by their names: another
-  game, the update given as the game, a base-only XCI without `--update`, or another version stops it with a message.
-- Every step is checked against [`games/xcx/assets/expected-v1.0.1.json`](games/xcx/assets/expected-v1.0.1.json), so a
-  damaged dump stops at the first wrong file: the 1.0.1 code (every ExeFS block verified), the rewrite for Apple silicon
+  game, the update given as the game, a base-only file without `--update`, or another version stops it with a message.
+- Every step is checked against the version's `games/xcx/assets/expected-<version>.json` (1.0.1 or 2.0.0), so a
+  damaged dump stops at the first wrong file: the code (every ExeFS block verified), the rewrite for Apple silicon
   and its two checks (structure, and semantics in an emulator), the system fonts, the merged RomFS (all six IVFC levels),
   the shader translator's SHA-256 and SPIRV-Cross's pinned commit. Key values are never printed.
 - Each step is timed. A second run reuses what is already done and correct and takes seconds.
@@ -147,7 +182,7 @@ For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.n
   can be deleted afterwards; keep it to rebuild in seconds.
 - `--delete-work` deletes the work folder once the app (or IPA) is built and its final check passed, never after a
   failure or a cancel. It deletes only a folder `build_app.py` made (its `logs/build-times.json` and
-  `extracted/v101/extraction-manifest.json`), and never the repository root, `personal/`, your home folder, a folder
+  `extracted/<v>/extraction-manifest.json`), and never the repository root, `personal/`, your home folder, a folder
   holding the output, an input file or tracked files; anything else is refused before the build starts. It prints what
   it frees. The app's game data are APFS clones of the work folder's, so that space (about 14 GB) comes back only once
   the app is deleted too. The next build or update starts from scratch (about 8 minutes).
@@ -195,11 +230,15 @@ make prepare WORK=$WORK PY=$PY   # tables, RomFS index, fonts; every input check
 make app WORK=$WORK PY=$PY GAME="$PWD/$XCI" KEYS="$PWD/$KEYS"
 ```
 
+These are the 1.0.1 steps. For 2.0.0, use `v200` in the paths, give the scripts `--update <2.0.0 update.nsp>
+--version v200`, and pass `VERSION=v200` to every `make` target (`VERSION ?= v101`); the outputs go to
+`build/v200/`, `build/xcx-native-v200` and `build/launcher-v200`.
+
 The extraction scripts take `--update <update.nsp>` (and `--title-keys`) for a base NSP; `extract_shared_fonts.py`
 takes `--firmware <folder>` instead of `--xci`. The rewrite checks are in [`games/xcx/README.md`](games/xcx/README.md).
 
 `make app` builds a **development app** (about 3 MB) at `$WORK/Xenoblade Chronicles X.app`: it does not contain the
-game but runs `build/xcx-native` from the work folder its Info.plist names, so the work folder must stay where it is.
+game but runs `build/xcx-native-<v>` from the work folder its Info.plist names, so the work folder must stay where it is.
 `GAME` and `KEYS` must be absolute paths; they are used only for the app's icon. `make install WORK=$WORK` copies it to
 `/Applications` or `~/Applications`. The game can also be run from a terminal in the work folder: `make boot WORK=$WORK`
 from `games/xcx`, which writes its log to `$WORK/logs/boot.log`. See [`games/xcx/README.md`](games/xcx/README.md) for
@@ -229,23 +268,38 @@ Build (steps 1-6 are the Mac build's and reuse the same work folder):
 python3 build_app.py "<game folder>/Xenoblade Chronicles X Definitive Edition.xci" -k <prod.keys> --platform ios
 ```
 
-This writes `Xenoblade Chronicles X.ipa` next to the game file (`-o` picks another `.ipa` path). The IPA is about
+This writes `Xenoblade Chronicles X.ipa` next to the game file (`-o` picks another `.ipa` path); add `--update <2.0.0
+update.nsp>` for 2.0.0, as for the Mac. The IPA is about
 40 MB, because it holds the game code, the RomFS index, the system fonts and the carried shaders, but not the 14.3 GB
 game image. `--ios-seed-cache <folder>` adds another Mac shader cache to carry. By default the build carries the
 cache in `~/Library/Application Support/MacNativeGames/XCX/shader-cache` and the work folder's own caches.
 
+**In the window:** pick *iPhone and iPad (experimental)*. The output becomes an `.ipa`, and the prerequisites add Xcode
+with the iOS SDK, xcodegen and CMake, and the iOS platform (Xcode › Settings › Components). **Build IPA** builds it.
+The optional *Install on my iPhone or iPad* section below it then:
+
+- lists the paired devices by name and model (connect with a cable, unlock, tap Trust; the refresh button looks again);
+- shows your signing team, or, when there is no Apple Development certificate, the steps to make one (Xcode › Settings
+  › Accounts › add your Apple ID › Manage Certificates › + › Apple Development);
+- copies the game data of the IPA's own version (on by default), and shows each step (device, profile, sign, install,
+  game data part N of M) and any error in the tool's own words, with what to do. Keep the device unlocked; if Xcode's
+  Devices window shows it as *Preparing*, let that finish first ("may need to be unlocked to recover from previously
+  reported preparation errors" means exactly this).
+
 Install it with your own Apple ID or a sideloading tool:
 
-- With Xcode and a cable: add your Apple ID in Xcode › Settings › Accounts (a free Personal Team works), connect and
-  trust the device, then run
-  `python3 games/xcx/ios/tools/install_device.py "Xenoblade Chronicles X.ipa" --device "<device name>" --game-data <work folder>/extracted/v101/romfs/romfs.bin`.
+- With Xcode and a cable (what the window runs): add your Apple ID in Xcode › Settings › Accounts (a free Personal Team
+  works), connect and trust the device, then run
+  `python3 games/xcx/ios/tools/install_device.py "Xenoblade Chronicles X.ipa" --device "<device name>" --game-data <work folder>/extracted/<v101 | v200>/romfs/romfs.bin`
+  (the version the IPA was built for). `--list-devices` only lists devices and teams, `--dry-run` checks everything
+  and stops before signing, and `--progress json` gives one JSON event a line.
   It signs the app as `org.macnativegames.xcx.<team>`, installs it, and copies the game image once into the app's
   Documents/GameData in 1 GiB parts. Later installs skip the copy while the device holds the same image. A free Apple ID
   signs for 7 days and a paid membership for a year. Run the command again to renew; your saves are kept. On first use,
   trust your Apple ID under Settings › General › VPN & Device Management.
 - With another sideloading tool: install the IPA and keep its entitlement (`increased-memory-limit`). Then get the game
   data onto the device: in Finder, select the device, open Files, and drag
-  `<work folder>/extracted/v101/romfs/romfs.bin` onto Xenoblade Chronicles X. The app moves it into its GameData folder
+  `<work folder>/extracted/<v101 | v200>/romfs/romfs.bin` onto Xenoblade Chronicles X. The app moves it into its GameData folder
   on the next start. If the game starts before the copy is complete, it says so and waits for the next start.
 
 The game data stays in the app's Documents when you reinstall or update the app. It is excluded from iCloud backups. The

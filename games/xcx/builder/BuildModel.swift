@@ -1,6 +1,8 @@
-// The builder's state: the chosen files (remembered in UserDefaults), the requirement check, and the build, which is
-// build_app.py run with --progress json. Its stdout carries one JSON event a line (plan, step, start, done, error,
-// cancelled, work-deleted; requirement and requirements for --check-requirements), its stderr the human log. Only paths are passed
+// The builder's state: the chosen files (remembered in UserDefaults), what they are (build_app.py --identify: the
+// game file's base and update version, the update NSP's version), the version of the app at the output (its
+// Info.plist), the requirement check, and the build, which is build_app.py run with --progress json. Its stdout carries
+// one JSON event a line (plan, step, start, done, error, cancelled, work-deleted; requirement and requirements for
+// --check-requirements; identified for --identify), its stderr the human log. Only paths are passed
 // to it; key files are never read here, and build_app.py never prints key values.
 import AppKit
 import Foundation
@@ -49,6 +51,21 @@ enum Field: String, CaseIterable {
 }
 
 let appName = "Xenoblade Chronicles X"
+
+/// The game versions the port builds (games/xcx/scripts/app_bundle.py VERSIONS), oldest first.
+let versionOrder = ["v101": 1, "v200": 2]
+let versionDisplay = ["v101": "1.0.1", "v200": "2.0.0"]
+
+/// What build_app.py --identify found in a chosen file.
+struct Detected: Equatable {
+    var text: String          // for the row: "XCI: base v0 + update 1.0.1"
+    var version: String?      // the update's version folder (v101 / v200) when it is a supported update
+    var problem = false       // not this game, an unsupported version, or unreadable
+}
+
+/// The saves: per user, not in the app, so replacing the app keeps them.
+let profileFolder = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/MacNativeGames/XCX/profile")
 let iosWarning = "Experimental: shaders are not pre-translated, so most of the picture is missing. An iPhone or iPad "
     + "cannot translate shaders while playing, and this port does not translate them ahead of time yet. The IPA carries "
     + "only the shader variants this Mac has already translated; every other draw is skipped."
@@ -73,6 +90,14 @@ final class BuildModel: ObservableObject {
     }
     @Published private(set) var paths: [Field: URL] = [:]
     @Published private(set) var gameIsNSP = false
+    /// build_app.py --identify's results for the game file and the update NSP (nil: not read yet or nothing chosen).
+    @Published private(set) var detected: [Field: Detected] = [:]
+    @Published private(set) var identifying = false
+    /// The version of the app at the output: (folder, display) from its Info.plist, nil when there is none.
+    @Published private(set) var installed: (version: String, display: String)?
+    /// The version the running or last build makes (the start event).
+    @Published private(set) var building: String?
+    @Published private(set) var backupMessage: String?
 
     @Published private(set) var requirements: [Requirement] = []
     @Published private(set) var requirementsState: RequirementsState = .unknown
@@ -90,6 +115,7 @@ final class BuildModel: ObservableObject {
 
     private var process: Process?
     private var checkProcess: Process?
+    private var identifyProcess: Process?
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
     private var lastErrorLines: [String] = []
@@ -103,6 +129,7 @@ final class BuildModel: ObservableObject {
             if let path = defaults.string(forKey: "path.\(field.rawValue)") { paths[field] = URL(fileURLWithPath: path) }
         }
         gameIsNSP = Self.isNSP(paths[.game])
+        refreshInstalled()
     }
 
     // MARK: files
@@ -110,6 +137,8 @@ final class BuildModel: ObservableObject {
     func set(_ field: Field, _ url: URL?) {
         paths[field] = url
         if field == .game { gameIsNSP = Self.isNSP(url) }
+        if [.game, .update, .keys].contains(field) { identify() }
+        if [.game, .output].contains(field) { refreshInstalled() }
         guard persist else { return }
         if let url { UserDefaults.standard.set(url.path, forKey: "path.\(field.rawValue)") }
         else { UserDefaults.standard.removeObject(forKey: "path.\(field.rawValue)") }
@@ -139,12 +168,164 @@ final class BuildModel: ObservableObject {
     var missing: [String] {
         var list: [String] = []
         if paths[.game] == nil { list.append("the game file") }
-        if gameIsNSP && paths[.update] == nil { list.append("the 1.0.1 update NSP") }
+        if (gameIsNSP || gameIsBaseOnly) && paths[.update] == nil { list.append("an update NSP (1.0.1 or 2.0.0)") }
         if paths[.keys] == nil { list.append("prod.keys") }
         return list
     }
 
     var isRunning: Bool { phase == .running || phase == .cancelling }
+    /// The game file holds the base game and no update (--identify): an update NSP is then required.
+    var gameIsBaseOnly: Bool { detected[.game].map { $0.version == nil && !$0.problem && $0.text.contains("base v0") } ?? false }
+    /// The update field is required: an NSP, or a game file with no update inside.
+    var updateRequired: Bool { gameIsNSP || gameIsBaseOnly }
+
+    // MARK: versions
+
+    /// The version a build makes: the update NSP's when one is chosen (it wins over the update inside an XCI), else
+    /// the game file's own update.
+    var buildVersion: String? {
+        if detected[.game]?.problem ?? false { return nil }   // not a base game: nothing is built
+        if paths[.update] != nil { return detected[.update]?.version }
+        return detected[.game]?.version
+    }
+    /// Building replaces an app of an older version: the saves stay, but may not go back.
+    var updatesOlderApp: Bool {
+        guard platform == .macos, let new = buildVersion, let old = installed?.version,
+              let a = versionOrder[new], let b = versionOrder[old] else { return false }
+        return a > b
+    }
+    /// Building replaces an app of a newer version (going back).
+    var replacesNewerApp: Bool {
+        guard platform == .macos, let new = buildVersion, let old = installed?.version,
+              let a = versionOrder[new], let b = versionOrder[old] else { return false }
+        return a < b
+    }
+    /// The version of the IPA at the output, from its own Info.plist (CFBundleShortVersionString; nil: not known).
+    var ipaVersion: String? {
+        guard platform == .ios, let ipa = output, FileManager.default.fileExists(atPath: ipa.path) else { return nil }
+        let plistData: Data?
+        if ipa.pathExtension == "app" {
+            plistData = try? Data(contentsOf: ipa.appendingPathComponent("Info.plist"))
+        } else {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+            p.arguments = ["-p", ipa.path, "Payload/*.app/Info.plist"]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return nil }
+            plistData = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+        }
+        guard let plistData, let info = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+              let short = info["CFBundleShortVersionString"] as? String else { return nil }
+        return versionDisplay.first { $0.value == short }?.key
+    }
+    @Published private(set) var lastBuilt: String?
+
+    var hasSaves: Bool {
+        let save = profileFolder.appendingPathComponent("save")
+        let files = FileManager.default.enumerator(at: save, includingPropertiesForKeys: [.isRegularFileKey])?
+            .contains { ($0 as? URL).map { (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true } ?? false }
+        return files ?? false
+    }
+
+    /// The version an app records: XCXGameVersion, or (apps from before 2.0.0 support) its display version.
+    static func appVersion(_ app: URL) -> (version: String, display: String)? {
+        guard let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return nil }
+        let short = info["CFBundleShortVersionString"] as? String
+        let folder = (info["XCXGameVersion"] as? String) ?? versionDisplay.first { $0.value == short }?.key
+        guard let folder, let display = versionDisplay[folder] else { return nil }
+        return (folder, display)
+    }
+
+    func refreshInstalled() {
+        installed = output.flatMap { $0.pathExtension == "app" ? Self.appVersion($0) : nil }
+    }
+
+    /// Copies the profile (the saves) to profile-<version>-backup-<date> next to it; never moves or overwrites.
+    func backupSaves() -> Bool {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        let label = installed?.display ?? "saves"
+        let target = profileFolder.deletingLastPathComponent()
+            .appendingPathComponent("profile-\(label)-backup-\(formatter.string(from: Date()))")
+        do {
+            try FileManager.default.copyItem(at: profileFolder, to: target)
+            backupMessage = "Saves copied to \((target.path as NSString).abbreviatingWithTildeInPath)"
+            appendLog("[window] profile copied to \(target.path)\n")
+            return true
+        } catch {
+            backupMessage = "The saves could not be copied: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// build_app.py --identify for the chosen game file and update NSP (needs prod.keys); a newer choice replaces a
+    /// running one.
+    func identify() {
+        identifyProcess?.terminate()
+        identifyProcess = nil
+        detected = [:]
+        guard let script = launch.script, let python = launch.python, let game = paths[.game] else { identifying = false; return }
+        guard let keys = paths[.keys] else {
+            detected[.game] = Detected(text: "choose prod.keys to read the version")
+            if paths[.update] != nil { detected[.update] = Detected(text: "choose prod.keys to read the version") }
+            identifying = false
+            return
+        }
+        var args = [script, game.path, "-k", keys.path, "--identify", "--progress", "json"]
+        if let url = paths[.update] { args += ["--update", url.path] }
+        if let url = paths[.work] { args += ["--work", url.path] }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: python)
+        p.arguments = args
+        p.currentDirectoryURL = URL(fileURLWithPath: script).deletingLastPathComponent()
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.terminationHandler = { proc in
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            Task { @MainActor in self.finishIdentify(proc, data) }
+        }
+        identifyProcess = p
+        identifying = true
+        do { try p.run() } catch { identifying = false; identifyProcess = nil }
+    }
+
+    private func finishIdentify(_ proc: Process, _ data: Data) {
+        guard proc === identifyProcess else { return }
+        identifyProcess = nil
+        identifying = false
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            guard let e = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  e["event"] as? String == "identified", let role = e["role"] as? String else { continue }
+            let field: Field
+            switch role { case "game": field = .game; case "update": field = .update; default: continue }
+            if let error = e["error"] as? String { detected[field] = Detected(text: error, problem: true); continue }
+            let kind = (e["container"] as? String ?? "").uppercased()
+            let base = e["base"] as? Bool ?? false
+            let number = e["update_version"] as? Int
+            let version = e["version"] as? String
+            var parts: [String] = []
+            if base { parts.append("base v0") }
+            if let version, let d = versionDisplay[version] { parts.append("update \(d)") }
+            else if let number { parts.append("update v\(number), not supported (1.0.1 or 2.0.0)") }
+            if let other = e["other"] as? String { parts.append("not Xenoblade Chronicles X: \(other)") }
+            var note: String?
+            if field == .game && !base && number != nil { note = "an update, not the base game: choose it as the Update" }
+            if field == .update && base && number == nil { note = "a base game, not an update" }
+            if field == .game && base && number == nil && paths[.update] == nil { note = "no update inside: choose the update NSP" }
+            let problem = (number != nil && version == nil) || e["other"] is String || (field == .update && number == nil)
+                || (field == .game && !base)
+            detected[field] = Detected(text: "\(kind): " + (parts.isEmpty ? "no game content" : parts.joined(separator: " + "))
+                                       + (note.map { " — \($0)" } ?? ""),
+                                       version: version, problem: problem)
+        }
+        onPhaseChange?(phase)
+    }
     var canBuild: Bool { missing.isEmpty && !isRunning && launch.script != nil && requirementsState == .met }
 
     // MARK: requirements
@@ -203,7 +384,7 @@ final class BuildModel: ObservableObject {
     func arguments() -> [String]? {
         guard let script = launch.script, let game = paths[.game], let keys = paths[.keys], let output else { return nil }
         var args = [script, game.path, "-k", keys.path]
-        if let url = paths[.update], gameIsNSP { args += ["--update", url.path] }
+        if let url = paths[.update] { args += ["--update", url.path] }   // with an XCI too: a newer update wins
         if let url = paths[.firmware] { args += ["--firmware", url.path] }
         if let url = paths[.titleKeys] { args += ["--title-keys", url.path] }
         if let url = paths[.work] { args += ["--work", url.path] }
@@ -217,6 +398,7 @@ final class BuildModel: ObservableObject {
         steps = []
         log = ""
         workDeleted = false
+        building = nil
         lastErrorLines = []
         stdoutBuffer = Data()
         stderrBuffer = Data()
@@ -312,9 +494,13 @@ final class BuildModel: ObservableObject {
             let i = steps.firstIndex { $0.id == name }!
             steps[i].status = status
             if status == .running { steps[i].started = Date() } else { steps[i].seconds = event["seconds"] as? Double }
+        case "start":
+            building = event["display"] as? String
+            lastBuilt = event["version"] as? String
         case "work-deleted":
             workDeleted = true
         case "done":
+            refreshInstalled()
             setPhase(.done(out: event["out"] as? String ?? output?.path ?? ""))
         case "error":
             setPhase(.failed(step: event["step"] as? String, message: event["message"] as? String ?? "the build failed",
@@ -350,7 +536,7 @@ final class BuildModel: ObservableObject {
         onPhaseChange?(new)
     }
 
-    private func appendLog(_ text: String) {
+    func appendLog(_ text: String) {
         log += text
         if log.utf8.count > 400_000 { log = "…\n" + String(log.suffix(300_000)) }
     }

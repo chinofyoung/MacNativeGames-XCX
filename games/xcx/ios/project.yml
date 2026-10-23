@@ -4,7 +4,8 @@
 # and generates the Xcode project in the work folder (<work>/build/ios), so nothing is written into this source tree.
 #   XCX_SRC     games/xcx (the runtime, graphics layer and this folder)
 #   XCX_GEN     <work>/build/ios/Gen: generated tables, the embedded game code (embed.S, ios_embed.h), device libraries
-#   XCX_APP_NAME, XCX_BUNDLE_ID, XCX_DEPLOYMENT, XCX_SDK (iphoneos), XCX_VERSION, XCX_BUILD, XCX_CPU_FLAGS
+#   XCX_APP_NAME, XCX_BUNDLE_ID, XCX_DEPLOYMENT, XCX_SDK (iphoneos), XCX_VERSION, XCX_BUILD, XCX_CPU_FLAGS,
+#   XCX_VERSION_FLAGS (-DXCX_GAME_V101 / -DXCX_GAME_V200: runtime/game_version.h)
 # The sources mirror the Mac Makefile: every runtime/*.c, *.m, *.S except the Mac front end (frontend.m; frontend_ios.m
 # takes its place), loader.c once more with main renamed (the app's main.m starts it on a game thread), and the graphics
 # layer (third_party/d2r_gfx/gfx/nvn, tex) with -DGAME_XCX, as the Makefile's GFX_FLAGS.
@@ -94,4 +95,4 @@ targets:
         - "\"${XCX_SRC}/third_party/d2r_gfx/gfx/nvn/include\""
         - "\"${XCX_GEN}\""
         - "\"${XCX_GEN}/deps/include\""
-      OTHER_CFLAGS: $(inherited) ${XCX_CPU_FLAGS}
+      OTHER_CFLAGS: $(inherited) ${XCX_CPU_FLAGS} ${XCX_VERSION_FLAGS}

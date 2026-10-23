@@ -2,8 +2,10 @@
 """What a game file holds, by the IDs inside it (never by its name): one JSON line per file with the container kind, the
 title ID and content type of each NCA, every content meta (title, type, version) and the rights IDs of its tickets.
 
-build_app.py uses it to recognise Xenoblade Chronicles X: Definitive Edition (0100453019AA8000) and its 1.0.1 update
-(0100453019AA8800 v65536) before any long step, and to name what a wrong file is instead. Only IDs and versions are
+build_app.py uses it to recognise Xenoblade Chronicles X: Definitive Edition (0100453019AA8000) and its update
+(0100453019AA8800: 1.0.1 = v65536, 2.0.0 = v196608; app_bundle.VERSIONS) before any long step, and to name what a wrong
+file is instead. Each Patch meta of this game also carries `game_version` (v101 / v200, or null for an unsupported one)
+and `display_version`. Only IDs and versions are
 printed; keys and title keys stay in memory. No executable launch, no network.
 usage: identify_game.py <file> [<file> ...] --keys <prod.keys>
 """
@@ -15,7 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extract_exefs import container_entries, load_keys, read_at, read_nca_header, nca_ctr_key   # noqa: E402
-from merge_romfs import Ctr, parse_cnmt, read_pfs, sections                                       # noqa: E402
+from merge_romfs import Ctr, PATCH_TITLE, parse_cnmt, read_pfs, sections                          # noqa: E402
+import app_bundle                                                                                  # noqa: E402
 
 TICKET_BODIES = {0x10000: 0x240, 0x10001: 0x140, 0x10002: 0x80, 0x10003: 0x240, 0x10004: 0x140, 0x10005: 0x80}
 
@@ -57,7 +60,11 @@ def identify(path, keys):
                         meta = parse_cnmt(data) if data[0xc] in (0x80, 0x81) else dict(
                             title_id=f'{struct.unpack_from("<Q", data, 0)[0]:016X}',
                             version=struct.unpack_from('<I', data, 8)[0], type=data[0xc])
-                        metas.append(dict(title_id=meta['title_id'], version=meta['version'], type=meta['type']))
+                        row = dict(title_id=meta['title_id'], version=meta['version'], type=meta['type'])
+                        if meta['type'] == 0x81 and meta['title_id'] == PATCH_TITLE:
+                            row['game_version'] = app_bundle.by_update_version(meta['version'])
+                            row['display_version'] = app_bundle.display(row['game_version']) if row['game_version'] else None
+                        metas.append(row)
         return dict(file=path.name, container=kind, ncas=ncas, metas=metas, tickets=tickets(f, entries))
 
 

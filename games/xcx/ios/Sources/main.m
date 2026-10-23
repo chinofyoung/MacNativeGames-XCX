@@ -14,7 +14,8 @@
 #include <math.h>
 #include "runtime.h"
 #include "dmsh_chain.h"
-#include "romfs_config.h"   // ROMFS_IMAGE_SIZE: the build's image (generated, <work>/build)
+#include "romfs_config.h"   // ROMFS_IMAGE_SIZE: the build's image (generated, <work>/build/<v>)
+#include "game_version.h"   // TOTK_GAME_DIR (XCX_VERSION_FLAGS: -DXCX_GAME_V101 / V200)
 #import "touch_pad.h"
 
 int totk_host_main(int argc, char **argv);
@@ -166,7 +167,7 @@ static void audio_observe(void) {
         NSString *app = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"Xenoblade Chronicles X";
         g_no_game_data = copying || image
             ? [NSString stringWithFormat:@"The game data (romfs.bin, %.1f GB) is still being copied to Files › On My iPhone › %@. Open the game again when it is done.", ROMFS_IMAGE_SIZE / 1e9, app]
-            : [NSString stringWithFormat:@"No game data. Copy romfs.bin from the Mac's work folder (extracted/v101/romfs/romfs.bin) to "
+            : [NSString stringWithFormat:@"No game data. Copy romfs.bin from the Mac's work folder (extracted/" TOTK_GAME_DIR "/romfs/romfs.bin) to "
                                           "this app: with games/xcx/ios/tools/install_device.py --game-data, or in Finder (the device › Files: "
                                           "drag romfs.bin onto %@), then open the game again.", app];
         fprintf(stderr, "[xcx] no game image: %s\n", g_no_game_data.UTF8String);

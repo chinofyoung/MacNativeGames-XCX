@@ -1,0 +1,64 @@
+{
+    "_comment": "Verified Xenoblade Chronicles X: Definitive Edition 2.0.0 code (the update NSP's ExeFS), rewrite bytes and merged RomFS (complete base v0 from the XCI or a base NSP + the 2.0.0 BKTR update, which is cumulative over v0). Runtime validation is recorded separately (CHANGELOG).",
+    "title_id": "0100453019AA8000",
+    "update_title_id": "0100453019AA8800",
+    "version": 196608,
+    "display_version": "2.0.0",
+    "main_build_id": "EC4ED46BBC4A9EBBE7CE0AF7A4A8EBBC09E5724A",
+    "base_program_nca": {
+        "name": "d734f1f952d3f8ca859a0454358359fe.nca",
+        "nca_offset": 385975808,
+        "size": 14382743552
+    },
+    "update_program_nca": {
+        "name": "38184f76d55f3c0e37d2c7c417dced6b.nca",
+        "nca_offset": 2960,
+        "size": 115045376,
+        "container": "nsp"
+    },
+    "exefs_sha256": {
+        "main": "0a9dbf1f3816dd0fab0a08883d538c74d9b9fd7d939cb29aaf0947d71a201026",
+        "main.npdm": "75dc2bc1dd297288c1a6b79dced8c68b9a932154c31c077cab079816754daa12",
+        "rtld": "ccc8301636595a6273681568f919435238c1a9f2a31263e991a0d6f11bf16771",
+        "sdk": "0b72afe99b4c2e4ee89ddbf449351aed2036b077536bf01be02f4991c8af22d3",
+        "subsdk0": "24bc0737080524edcb690523ece78a610ca2260dfacff4a8fbeb463d5a0aec97"
+    },
+    "rewritten_sha256": {
+        "main.patched.bin": "fc092df7ed64f3afedf812ff93dd5fc855c72276d077c7ed8d03a38ec0aba9b5",
+        "sdk.patched.bin": "9d629869f383b2966067391a3c3cf2102550274f523c0d550fff7cde1b605680",
+        "subsdk0.patched.bin": "407f783cf6f501131b140ba597897166dc3acac914b80e1b3cb15c1eb12e4907"
+    },
+    "romfs": {
+        "size": 14331812280,
+        "sha256": "31afb6d9d956b4dba5117a951055c47c9adf132deaca548579cfabc77ceea91a",
+        "files": 53,
+        "bytes_from_base": 14272515648,
+        "bytes_from_update": 87411576
+    },
+    "_shared_fonts_comment": "The six system shared fonts are not in the game's own partitions; they come from the system update the XCI carries, or from a firmware (--firmware). They differ between firmware versions. Each name lists the SHA-256 of the known versions: first the one in this game card's system update (the reference dump), then the firmware the port was first run with, then the original project's Tears of the Kingdom reference. A font of another version is accepted when its NCA levels verify and it is a valid BFTTF, and is then bound by its own SHA-256.",
+    "shared_fonts_sha256": {
+        "standard": [
+            "823913c9d80807979381e327846466f561f31ba1842cea8f7fedc5ad7d45d2ad",
+            "d8f0b7510ea03e2a7e7552562076ce374b4bd2c9c9c1c79466f342758c046413"
+        ],
+        "chinese-simplified": [
+            "a04eb490283d8393b2c49c52e315132461d790ac73996cb43ac869ce72003938",
+            "7e95d45f43c6f35ee0c7bd8ea446675d8ab0390e18fd2844abcac11d2bff7389"
+        ],
+        "chinese-simplified-extension": [
+            "f5784e7a553fef9a05b3b7dba94e77e79162ace9db8dafc715ace0be1fd9b9ff",
+            "d87f8c101f852340c068ceb040565784acb19926347598d219ed57cf51bff5a9",
+            "0f90d45b741e9da7700c416eb2b51996b458c3e4fb3c3291740b758c298e7a25"
+        ],
+        "chinese-traditional": [
+            "9d59b74e59a2dc92296d6bebad7cce791ba94688bd436304aaae174a58bd7457"
+        ],
+        "korean": [
+            "5a4e694782ead5ddcbc0a226aab24362e2d641ca33bac7bdf8cda36ff157c9e8",
+            "2c03d70de164671c1f33caca76120e6c73223bc73a41f90605e151b04e7eb68a"
+        ],
+        "nintendo-extension": [
+            "f9f62e025c9bbe0e9ae25a54ba5011202b1e3a3f3c33b2d876c40aff6174af68"
+        ]
+    }
+}

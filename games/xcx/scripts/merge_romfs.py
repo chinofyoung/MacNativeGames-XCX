@@ -3,12 +3,15 @@
 
 Xenoblade Chronicles X: Definitive Edition ships as one XCI holding the complete base (v0) and the 1.0.1 update
 (0100453019AA8800 v65536) with its common ticket. The base can also come from a base NSP or a base-only XCI and the
-update from its own NSP (`--update`); NCAs of an NSP are decrypted with the NSP's common ticket, or with `--title-keys`
+update from its own NSP (`--update`), which is also how a newer update is used: 2.0.0 (v196608) from its NSP with the
+XCI's base (the update given wins over the one inside the XCI). The supported updates are app_bundle.VERSIONS;
+`--version <v>` requires one of them; NCAs of an NSP are decrypted with the NSP's common ticket, or with `--title-keys`
 (title.keys) when it has none. Both Program NCAs carry the base title ID, so each is found through its
 own content meta (CNMT) instead: the Application meta names the base Program, the Patch meta the update Program.
 Unlike Bayonetta 3's, the base section is complete (not sparse, not compressed). The layers are, from the bottom up:
   base:   NCA body -> AES-CTR (the section's own upper IV)
   update: NCA body -> AES-CTR-Ex (per-entry generation) ; indirect table -> base section or update data
+Updates are cumulative over base v0 (2.0.0's indirect table refers to the base and its own data only, never to 1.0.1).
 The IVFC header of the update section covers the merged image, so a wrong layer fails a block hash.
 Keys stay in memory. No executable launch, no network.
 """
@@ -26,10 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # extract_exefs / ext
 from extract_exefs import (decrypt, read_at, require, load_keys, load_title_keys, container_entries, common_tickets,
                            nca_ctr_key, read_nca_header, partition_entries)
 from extract_romfs import index_romfs
+import app_bundle   # the version table (standard library only)
 
 BASE_TITLE = '0100453019AA8000'
 PATCH_TITLE = '0100453019AA8800'
-PATCH_VERSION = 65536   # 1.0.1
+PATCH_VERSIONS = {row['update_version']: v for v, row in app_bundle.VERSIONS.items()}   # 65536: v101, 196608: v200
 NODE = 0x4000
 CHUNK = 8 << 20
 
@@ -97,10 +101,11 @@ def parse_cnmt(data):
     return dict(title_id=f'{tid:016X}', version=version, type=kind, program=programs[0])
 
 
-def open_program(path, keys, which, title_keys=None):
+def open_program(path, keys, which, title_keys=None, version=None):
     """The base ('base') or update ('update') Program NCA of an XCI or NSP: (file, record, header, Ctr, meta).
 
-    Both Program NCAs carry the base title ID; the Application meta (base) and the Patch meta 1.0.1 (update) name them.
+    Both Program NCAs carry the base title ID; the Application meta (base) and the Patch meta (update) name them. The
+    update must be a supported version (PATCH_VERSIONS), and exactly `version` (a folder name, v101 / v200) when given.
     title_keys ({rights ID: encrypted title key}, load_title_keys) fills in for missing or personalized tickets; a
     common ticket in the file wins."""
     require(which in ('base', 'update'), 'which: base or update')
@@ -125,8 +130,12 @@ def open_program(path, keys, which, title_keys=None):
         require(len(found) == 1, f'Expected one Application meta for {BASE_TITLE}')
     else:
         found = [m for m in metas if m['type'] == 0x81 and m['title_id'] == PATCH_TITLE]
-        require(len(found) == 1, f'Expected one Patch meta for {PATCH_TITLE} (the 1.0.1 update)')
-        require(found[0]['version'] == PATCH_VERSION, f'Update version {found[0]["version"]}; only 1.0.1 (v{PATCH_VERSION}) is supported')
+        require(len(found) == 1, f'Expected one Patch meta for {PATCH_TITLE} (the update)')
+        number = found[0]['version']
+        require(number in PATCH_VERSIONS, f'Update version {app_bundle.describe(number)} is not supported; supported: '
+                                          f'{app_bundle.supported()}')
+        if version is not None and PATCH_VERSIONS[number] != version:
+            raise ValueError(f'Update version {app_bundle.describe(number)} is not the requested {app_bundle.display(version)}')
     meta = found[0]
     require(f'{meta["program"]}.nca' in ncas, f'Program NCA {meta["program"]} named by the meta is missing')
     record, hdr = ncas[f'{meta["program"]}.nca']
@@ -223,11 +232,17 @@ class Patched:
         gen0, self.secure = struct.unpack_from('<II', fs, 0x140)
         require(fs[4] == 4, 'Expected an AES-CTR-Ex (BKTR) update section')
         require(ind_off + ind_size <= ex_off and ex_off + ex_size <= end - start, 'Patch tables out of bounds')
-        # The AES-CTR-Ex table itself is plain AES-CTR; it covers everything before it, the indirect table included.
+        # The AES-CTR-Ex table itself is plain AES-CTR with the section's own generation. In 1.0.1 its rows cover
+        # everything before it, the indirect table included; in 2.0.0 they end at the indirect table, and the indirect
+        # table is then plain AES-CTR with the section's own generation too (the same key stream as the AES-CTR-Ex
+        # table): one row is added for it. Every IVFC level of 2.0.0's merged image verifies with this rule.
         plain = upper_iv(gen0, self.secure)
         ex_rows, ex_total = bucket_tree(lambda o, n: ctr.read(start + ex_off + o, n, plain), ex_size,
                                         fs[0x130:0x140], 0x10, ctr_ex_row)
-        require(ex_total == ex_off, 'AES-CTR-Ex table must cover the section up to itself')
+        require(ex_total in (ex_off, ind_off), 'AES-CTR-Ex table must end at the indirect table or at itself')
+        self.ex_covers = 'itself' if ex_total == ex_off else 'indirect table'
+        if ex_total == ind_off:
+            ex_rows = ex_rows + [(ind_off, ex_off, 0, gen0)]
         self.ctr, self.start, self.base, self.ex = ctr, start, base, Ranges(ex_rows)
         ind_rows, total = bucket_tree(lambda o, n: self.update_data(ind_off + o, n), ind_size,
                                       fs[0x110:0x120], 0x14, indirect_row)
@@ -289,11 +304,11 @@ def verify_ivfc(fs, size, read, image_path):
     return counts, levels[-1][1], digest.hexdigest()
 
 
-def open_merged(game, keys, update=None, title_keys=None):
+def open_merged(game, keys, update=None, title_keys=None, version=None):
     """(files, base record, update record, update FS header, Patched): the base from `game`, the update from `update`
     (an NSP) or, without it, from `game` too (the XCI holding both); the caller closes the files."""
     f, brec, bhdr, bctr, bmeta = open_program(game, keys, 'base', title_keys)
-    _, urec, uhdr, uctr, umeta = open_program(update or game, keys, 'update', title_keys)   # a second handle
+    _, urec, uhdr, uctr, umeta = open_program(update or game, keys, 'update', title_keys, version)   # a second handle
     base = PlainBase(bctr, *romfs_section(bhdr))
     ustart, uend, ufs = romfs_section(uhdr)
     return (f, uctr.f), dict(brec, meta=bmeta), dict(urec, meta=umeta), ufs, Patched(uctr, ustart, uend, ufs, base)
@@ -303,13 +318,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('game', type=Path, help='the XCI (base v0 + update 1.0.1), or the base game (XCI or NSP) with --update')
     parser.add_argument('--keys', required=True, type=Path)
-    parser.add_argument('--update', type=Path, help='the 1.0.1 update NSP (default: the update inside the game file)')
+    parser.add_argument('--update', type=Path, help='an update NSP, 1.0.1 or 2.0.0 (default: the update inside the game file)')
+    parser.add_argument('--version', choices=list(app_bundle.VERSIONS), help='require this update version (v101, v200)')
     parser.add_argument('--title-keys', type=Path, help='title.keys, for NSPs without a common ticket')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     require(not args.output.exists(), 'Output already exists; choose a new directory')
     title_keys = load_title_keys(args.title_keys) if args.title_keys else None
-    handles, brec, urec, ufs, patched = open_merged(args.game, load_keys(args.keys), args.update, title_keys)
+    handles, brec, urec, ufs, patched = open_merged(args.game, load_keys(args.keys), args.update, title_keys, args.version)
     try:
         args.output.mkdir(parents=True)
         image = args.output / 'romfs.bin'
@@ -318,6 +334,9 @@ def main():
         stat = args.game.stat()
         report = dict(status='pass', source=str(args.game.resolve()), source_size=stat.st_size, source_mtime_ns=stat.st_mtime_ns,
                       update_source=str(args.update.resolve()) if args.update else None,
+                      update_source_size=args.update.stat().st_size if args.update else None,
+                      update_source_mtime_ns=args.update.stat().st_mtime_ns if args.update else None,
+                      version=PATCH_VERSIONS[urec['meta']['version']], aes_ctr_ex_covers=patched.ex_covers,
                       romfs_mtime_ns=image.stat().st_mtime_ns, base=brec, update=urec, ivfc_blocks=counts, romfs_size=size, romfs_sha256=sha,
                       bytes_from_base=patched.from_base, bytes_from_update=patched.from_update,
                       files=files, integrity='FS headers, content metas and all six IVFC levels of the merged image verified; RSA signatures not checked')

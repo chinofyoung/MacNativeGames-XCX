@@ -1,13 +1,15 @@
 # Xenoblade Chronicles X: Definitive Edition native runtime. Self-contained: the Horizon host (runtime/), the rewriter
 # (third_party/d2r), the NVN-on-Metal layer (third_party/d2r_gfx), the shader translator (prebuilt/) and the scripts are
 # this folder's own copies, forked from the original project's games/by3 (the translator's source: tools/totk_xlate and
-# the repository's vendor/ryujinx). The runtime is retargeted to Xenoblade Chronicles X 1.0.1 (title 0100453019AA8000).
-# Everything generated goes to the work folder.
+# the repository's vendor/ryujinx). The runtime is retargeted to Xenoblade Chronicles X (title 0100453019AA8000), update
+# 1.0.1 or 2.0.0: VERSION=v101 (the default) or VERSION=v200 (scripts/app_bundle.py VERSIONS, runtime/game_version.h).
+# Everything generated goes to the work folder, each version's apart: build/<v>/ (generated headers),
+# build/xcx-native-<v>, build/launcher-<v>; the graphics objects, the shader tools and the shader cache are shared.
 # This is the developer path; players build with the repository's root build_app.py, which runs these same targets
 # (prepare, runtime, shader-tools, launcher, icon) with WORK=<its work folder> and then makes a self-contained app.
 # Inputs come from scripts/extract_code.py, scripts/merge_romfs.py and the rewrite (see README.md), then:
 #   make prepare   # scripts/prepare_runtime.py: tables, RomFS index, fonts config
-#   make runtime   # <work>/build/xcx-native (default work folder: XCX_build at the repository root)
+#   make runtime   # <work>/build/xcx-native-<v> (default work folder: XCX_build at the repository root)
 #   make boot      # run it from the work folder (cwd: extracted/ and rewritten/ are read relative to it);
 #                  # TOTK_GPU_ALLOW_SUBMIT=1 for a picture, TOTK_HEADLESS=1 to stop where the game first needs a window
 #   make app       # <work>/Xenoblade Chronicles X.app: double-click it (the launcher sets the picture's switches itself);
@@ -17,6 +19,14 @@ WORK ?= ../../XCX_build
 OUT := $(WORK)/build
 PY ?= python3
 NATIVE_OPT ?= -O2
+VERSION ?= v101
+ifeq ($(filter v101 v200,$(VERSION)),)
+$(error VERSION must be v101 (1.0.1) or v200 (2.0.0), not "$(VERSION)")
+endif
+VERSION_FLAGS := -DXCX_GAME_$(subst v,V,$(VERSION))
+GEN := $(OUT)/$(VERSION)
+BINARY := $(OUT)/xcx-native-$(VERSION)
+LAUNCHER := $(OUT)/launcher-$(VERSION)
 
 GFX_SRC := $(wildcard third_party/d2r_gfx/gfx/nvn/*.c third_party/d2r_gfx/gfx/nvn/*.m third_party/d2r_gfx/gfx/nvn/*.S third_party/d2r_gfx/gfx/tex/*.c third_party/d2r_gfx/gfx/tex/*.m)
 GFX_OBJECTS := $(patsubst %,$(OUT)/obj/%.o,$(GFX_SRC))
@@ -25,28 +35,28 @@ GFX_FLAGS := -DGAME_XCX -std=gnu11 -Wno-error -Wno-unused-function -Wno-unused-p
 
 RUNTIME_SRC := $(filter-out runtime/frontend_ios.m,$(wildcard runtime/*.c runtime/*.m runtime/*.S))
 RUNTIME_HEADERS := $(wildcard runtime/*.h)
-GENERATED := $(OUT)/runtime_tables.h $(OUT)/romfs_config.h $(OUT)/shared_fonts_config.h
+GENERATED := $(GEN)/runtime_tables.h $(GEN)/romfs_config.h $(GEN)/shared_fonts_config.h
 
 .PHONY: prepare runtime boot clean
 prepare:
-	"$(PY)" scripts/prepare_runtime.py --work "$(WORK)"
+	"$(PY)" scripts/prepare_runtime.py --work "$(WORK)" --version $(VERSION)
 
 $(GENERATED):
-	@echo "missing $@: run make prepare" && false
+	@echo "missing $@: run make prepare VERSION=$(VERSION)" && false
 
 $(OUT)/obj/%.o: % $(GFX_HEADERS) Makefile
 	@mkdir -p "$(dir $@)"
 	xcrun clang $(NATIVE_OPT) -g -Wall -Wextra $(GFX_FLAGS) -c "$<" -o "$@"
 
-$(OUT)/xcx-native: $(RUNTIME_SRC) $(RUNTIME_HEADERS) $(GENERATED) $(GFX_OBJECTS) Makefile
-	xcrun clang -std=c11 $(NATIVE_OPT) -g -Wall -Wextra -Werror -Wno-deprecated-declarations \
-	  -Ithird_party/d2r_gfx/gfx/nvn/include -I$(OUT) -I/opt/homebrew/opt/opus/include/opus -I/opt/homebrew/opt/libvpx/include \
+$(BINARY): $(RUNTIME_SRC) $(RUNTIME_HEADERS) $(GENERATED) $(GFX_OBJECTS) Makefile
+	xcrun clang -std=c11 $(NATIVE_OPT) -g -Wall -Wextra -Werror -Wno-deprecated-declarations $(VERSION_FLAGS) \
+	  -Ithird_party/d2r_gfx/gfx/nvn/include -I$(GEN) -I/opt/homebrew/opt/opus/include/opus -I/opt/homebrew/opt/libvpx/include \
 	  $(RUNTIME_SRC) $(GFX_OBJECTS) /opt/homebrew/opt/opus/lib/libopus.a /opt/homebrew/opt/libvpx/lib/libvpx.a \
 	  -framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics \
 	  -framework CoreText -framework UniformTypeIdentifiers -fobjc-arc -framework Cocoa -framework CoreVideo -framework CoreFoundation \
 	  -framework AudioToolbox -framework GameController -framework CoreHaptics -framework IOKit -o "$@"
 
-runtime: $(OUT)/xcx-native
+runtime: $(BINARY)
 
 # The runtime shader translation the graphics layer starts on first use: <work>/build/shader-service/totk_xlate (the
 # repository's prebuilt NativeAOT translator, checked against its SHA-256) and <work>/build/spirv-cross/spirv-cross,
@@ -73,15 +83,16 @@ $(OUT)/spirv-cross/spirv-cross:
 XCX_LOG ?= $(WORK)/logs/boot.log
 boot: runtime
 	@mkdir -p "$(dir $(XCX_LOG))"
-	cd "$(WORK)" && TOTK_HEADLESS=$${TOTK_HEADLESS-} ./build/xcx-native rewritten/v101 boot 2> "$(abspath $(XCX_LOG))"; echo "exit $$?; log: $(XCX_LOG)"
+	cd "$(WORK)" && TOTK_HEADLESS=$${TOTK_HEADLESS-} ./build/xcx-native-$(VERSION) rewritten/$(VERSION) boot 2> "$(abspath $(XCX_LOG))"; echo "exit $$?; log: $(XCX_LOG)"
 
-# The player's mods, made into checked tables: exefs patches (mods/1.0.1/<name>/exefs/*.pchtxt) -> <work>/patches,
+# The player's mods, made into checked tables: exefs patches (mods/<1.0.1 | 2.0.0>/<name>/exefs/*.pchtxt, for VERSION's
+# main build ID) -> <work>/patches,
 # RomFS mods (mods/<name>/romfs/...) -> their manifest.tsv (sizes and SHA-256 of the replacements and the originals).
 .PHONY: patches mods app
 patches:
-	"$(PY)" scripts/prepare_patches.py --work "$(WORK)"
+	"$(PY)" scripts/prepare_patches.py --work "$(WORK)" --version $(VERSION)
 mods:
-	for d in mods/*/romfs; do [ -d "$$d" ] && "$(PY)" scripts/make_mod_manifest.py "$$d" --romfs "$(WORK)/extracted/v101/romfs"; done; true
+	for d in mods/*/romfs; do [ -d "$$d" ] && "$(PY)" scripts/make_mod_manifest.py "$$d" --romfs "$(WORK)/extracted/$(VERSION)/romfs"; done; true
 
 # The app: a small launcher bundle (settings window with presets, then the game) that runs the game from the work
 # folder, which it names in Info.plist (XCXWorkFolder): nothing large is copied. Its icon comes from the game's own
@@ -95,18 +106,18 @@ GAME ?=
 KEYS ?=
 TITLE_KEYS ?=
 .PHONY: launcher icon
-launcher: $(OUT)/launcher
+launcher: $(LAUNCHER)
 icon: $(OUT)/AppIcon.icns
 # dmsh_chain.h: the shader cache's name, which a self-contained app keeps in the user's Library; game_version.h: the
 # version the launcher's --check compares with Info.plist
-$(OUT)/launcher: app/launcher.m third_party/d2r_gfx/gfx/nvn/dmsh_chain.h runtime/game_version.h Makefile
+$(LAUNCHER): app/launcher.m third_party/d2r_gfx/gfx/nvn/dmsh_chain.h runtime/game_version.h Makefile
 	@mkdir -p "$(dir $@)"
-	xcrun clang -std=gnu11 -O2 -Wall -Wextra -Werror -fobjc-arc -Ithird_party/d2r_gfx/gfx/nvn -Iruntime app/launcher.m -framework Cocoa -o "$@"
+	xcrun clang -std=gnu11 -O2 -Wall -Wextra -Werror -fobjc-arc $(VERSION_FLAGS) -Ithird_party/d2r_gfx/gfx/nvn -Iruntime app/launcher.m -framework Cocoa -o "$@"
 $(OUT)/AppIcon.icns:
 	@if [ -n "$(GAME)" ] && [ -n "$(KEYS)" ]; then cd scripts && "$(PY)" extract_app_icon.py "$(GAME)" --keys "$(KEYS)" --title 0100453019aa8000 $(if $(TITLE_KEYS),--title-keys "$(TITLE_KEYS)") --output "$(abspath $@)"; \
 	 else echo "no GAME= / KEYS=: the app gets no icon"; fi
-app: runtime shader-tools $(OUT)/launcher $(OUT)/AppIcon.icns
-	"$(PY)" scripts/app_bundle.py dev --app "$(APP)" --launcher "$(OUT)/launcher" --work "$(WORK)" --icon "$(OUT)/AppIcon.icns"
+app: runtime shader-tools $(LAUNCHER) $(OUT)/AppIcon.icns
+	"$(PY)" scripts/app_bundle.py dev --app "$(APP)" --launcher "$(LAUNCHER)" --work "$(WORK)" --icon "$(OUT)/AppIcon.icns" --version $(VERSION)
 	codesign --force --sign - "$(APP)"
 	@echo "built $(APP) (game data stay in $(abspath $(WORK)))"
 
@@ -119,4 +130,4 @@ install: app
 	@echo "installed $(INSTALL_DIR)/$(APP_NAME)"
 
 clean:
-	rm -rf "$(OUT)/obj" "$(OUT)/xcx-native"
+	rm -rf "$(OUT)/obj" "$(BINARY)" "$(BINARY).dSYM"
