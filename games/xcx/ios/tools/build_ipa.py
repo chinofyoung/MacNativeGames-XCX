@@ -146,7 +146,10 @@ def main():
     version = a.version
     root = work / 'build/ios'; gen = root / 'Gen'
     env = dict(os.environ, DEVELOPER_DIR=developer_dir())
-    for k in ('XCX_PATCHES',): env.pop(k, None)   # the exported code carries no optional patch
+    # The exported code carries the port's 60 fps patch sites and nothing else: on the device the Settings switch
+    # (XCX_FRAME_RATE) picks 30 or 60 through the patch's host page (runtime/game_patches.c), as code cannot change there.
+    env['XCX_PATCHES'] = '60fps'; env['XCX_FPS60'] = '0'
+
     subprocess.run(['xcrun', '--sdk', a.sdk, '--show-sdk-path'], env=env, check=True, capture_output=True)
     if not shutil.which('xcodegen'): raise RuntimeError('install xcodegen: brew install xcodegen')
     gen.mkdir(parents=True, exist_ok=True)

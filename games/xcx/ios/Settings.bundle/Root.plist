@@ -48,6 +48,34 @@
 				<string>ko</string>
 			</array>
 		</dict>
+		<dict>
+			<key>FooterText</key>
+			<string>Experimental. 60 lifts the game's own 30 fps cap (the port's 60 fps patch); the game keeps its speed when it runs below 60, but some effects and animations can then run a little slow, and the phone gets warmer. Takes effect after reopening the game.</string>
+			<key>Title</key>
+			<string>Frame rate</string>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+		</dict>
+		<dict>
+			<key>DefaultValue</key>
+			<string>30</string>
+			<key>Key</key>
+			<string>XCX_FRAME_RATE</string>
+			<key>Title</key>
+			<string>Frame rate</string>
+			<key>Titles</key>
+			<array>
+				<string>30 (original)</string>
+				<string>60 (experimental)</string>
+			</array>
+			<key>Type</key>
+			<string>PSRadioGroupSpecifier</string>
+			<key>Values</key>
+			<array>
+				<string>30</string>
+				<string>60</string>
+			</array>
+		</dict>
 	</array>
 	<key>StringsTable</key>
 	<string>Root</string>

@@ -167,10 +167,11 @@ make install WORK=$WORK                                         # optional: a co
 ```
 
 Launch it like any Mac app: double-click `XCX_build/Xenoblade Chronicles X.app` in Finder (or `open` it). A
-settings window comes first (presets, monitor, window or full screen, window size, output resolution, scaler, interface
-mod, FPS overlay; no frame-rate or internal-resolution setting, as no patch for them exists); Play starts the game with
+settings window comes first (presets, frame rate, monitor, window or full screen, window size, output resolution,
+scaler, interface mod, FPS overlay; no internal-resolution setting, as no patch for it exists); Play starts the game with
 the switches the terminal runs set by hand
-(`TOTK_GPU_ALLOW_SUBMIT=1` and the rest), the game's own 30 fps, the compact HUD, MetalFX upscaling and frame
+(`TOTK_GPU_ALLOW_SUBMIT=1` and the rest), the game's own 30 fps unless the frame rate is set to 60 (experimental, see
+[60 fps](#60-fps-experimental)), the compact HUD, MetalFX upscaling and frame
 interpolation off (key 2 still toggles interpolation; on an M1 it costs real frames). The development app does not hold
 the game: it runs `build/xcx-native-<v>` from the work folder it names in its Info.plist, so the work folder must stay
 where it was when the app was built.
@@ -186,7 +187,8 @@ where it was when the app was built.
 - Player exefs patches (`make patches VERSION=<v>`: `mods/<1.0.1 | 2.0.0>/<name>/exefs/*.pchtxt`, for that version's
   main build ID, -> `$WORK/patches/<slug>.tsv`) have no
   setting in the window: `open --env XCX_PATCHES=<slug>,<slug> <app>` passes them to the runtime
-  (`runtime/game_patches.c`), which checks every site before writing it. None are known for this game yet.
+  (`runtime/game_patches.c`), which checks every site before writing it. The port's own 60 fps patch is built in
+  (`60fps`, the window's frame-rate setting adds it).
 
 Checked 2026-10-23: the title offers Continue and it loads the save into Primordia, with no shader translated and no
 pipeline built (`docs/screenshots/xcx-stage5-app-title.png`, `xcx-stage5-app-continue.png`; details in the changelog).
@@ -207,10 +209,34 @@ build").
 Stage 4 and 5 are in progress; the changelog's Status table is kept current. Not checked yet: listening to the audio,
 cities (New Los Angeles), Skells, cutscenes (the opening's White Whale is a black silhouette, not rechecked), day-time
 lighting, water, menus beyond character creation, and a New Game with the current build. Then: the rest of the online
-SDK's offline answers as the game reaches them, 60 fps and resolution patches (the settings window has no such
-setting until they exist), a startup
+SDK's offline answers as the game reaches them, a resolution patch (the settings window has no such setting until it
+exists), a startup
 shader seed with Metal cache warm-up for the app, and up-front shader translation, which the iPhone / iPad build needs
 to draw.
+
+## 60 fps (experimental)
+
+The game holds itself at 30 fps; the present interval is not what limits it. At start-up it sets a **vsync count** of 2,
+and every frame ends in a busy wait until 2/60 s (times 0.997) have passed since the frame began; the frame time it
+simulates with is also 2/60 s, fixed, whatever the frame really took. The patch (`runtime/game_patches.c`, slug
+`60fps`, for 1.0.1 and 2.0.0) changes two places, each checked against the original instruction first:
+
+- the vsync count 2 becomes 1, so the wait ends after 1/60 s and the game can run at up to 60 fps;
+- the game's frame time (its GetFrameTime) returns the measured time of the last frames (the mean of the last 4
+  intervals between presents, each held to 1/60..1/20 s) instead of a fixed 1/60 s, so the game keeps its speed when a
+  frame takes longer than 1/60 s.
+
+Where to switch it: the Mac app's settings window (**Frame rate: 30 (original) / 60 (experimental)**, saved; `open --env
+XCX_FRAME_RATE=60 <app>` for one start), the iPhone / iPad Settings app (**Xenoblade Chronicles X › Frame rate**), or
+`XCX_PATCHES=60fps` for a run from the terminal (`XCX_FPS60=0` keeps the patch in place but runs the original 30 fps).
+30 is the default everywhere; with it the Mac runs unpatched code. The present base stays 60 Hz (`DM_PRESENT_HZ=60`).
+
+What was checked (2.0.0, Primordia at night, MacBook Air M1; the changelog has the numbers): the frame rate rises from 30
+to the GPU's limit (about 45-57 fps in the field on the M1, which needs about 18 ms of GPU a frame); walking speed is the
+same as at 30 fps (8.8 m/s); the clock's real-time counters advance at the same rate. Known limits: two of the game's
+subsystems step by a fixed 1/60 s a frame (they read the vsync count), so they run slower than normal while the game is
+below 60 fps; the time of day is frozen at that point of the story, so its speed could not be checked; cutscenes,
+Skells and cities were not tested; on a fanless Mac or a phone the higher frame rate means more heat.
 
 ## iPhone and iPad (experimental)
 
@@ -230,7 +256,9 @@ to draw.
 
 Everything is generated under `<work>/build/ios*`.
 
-The app (`ios/Sources/main.m`) sets the same runtime switches as `app/launcher.m`. The game image lives in
+The app (`ios/Sources/main.m`) sets the same runtime switches as `app/launcher.m`. The exported text carries the
+60 fps patch's sites (code cannot change on the device), and the Settings app's Frame rate switch (30 by default) picks
+the values the patch reads, so 30 runs the game's own pacing and frame time. The game image lives in
 Documents/GameData. The runtime reads the index and the image from one folder (`TOTK_ROMFS`), so the app copies its index
 there, and the Mac runtime is unchanged.
 

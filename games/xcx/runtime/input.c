@@ -146,6 +146,41 @@ __attribute__((constructor)) static void input_script_start(void) {
    Commands: key <Mac keycode> <milliseconds>, down/up <Mac keycode>, shot <path>, wshot <path>, passdump <frames>, gpucapture <path>.gputrace, querylog <frames>, anomdump,
    kbtest / kbtype <text> / kbenter / kbesc / kbshot <path> (the text entry bar), threads (dump every guest thread's wait), hletrace <0|1|2> (host calls the game makes), framestep <ms> (pin the frame step), close. */
 extern void dm_gfx_shot_at(long frames, const char *path);
+/* Diagnostics for finding and timing game state while the game runs (2026-10-23, the 60 fps patch's speed checks):
+   "memsnap <path> <addr> <len> [<addr> <len> ...]" writes each range (addr may be main+<hex>) to <path> as
+   {u64 addr, u64 len, bytes}, pages that cannot be read as zeros, after a header {u64 host ns, u64 main base};
+   "peek <addr> <words>" logs that many 32-bit words (hex and as floats) with the host time. Nothing is written to the game. */
+#include <mach/mach.h>
+#include <time.h>
+static uint64_t mem_addr(const char *s, char **end) {
+    if (!strncmp(s, "main+", 5)) return (uintptr_t)runtime_module_base("main") + strtoull(s + 5, end, 16);
+    return strtoull(s, end, 16);
+}
+static void mem_diag(char *line) {
+    line[strcspn(line, "\r\n")] = 0;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (!strncmp(line, "peek ", 5)) {
+        char *e; uint64_t a = mem_addr(line + 5, &e); unsigned n = (unsigned)strtoul(e, NULL, 10); if (n == 0 || n > 64) n = 1;
+        uint32_t w[64]; vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)a, n * 4, (vm_address_t)w, &got) != KERN_SUCCESS || got != n * 4) { fprintf(stderr, "[peek] %.4f %#llx unreadable\n", now / 1e9, (unsigned long long)a); return; }
+        char b[64 * 32]; size_t o = 0; for (unsigned i = 0; i < n; i++) { float f; memcpy(&f, &w[i], 4); o += (size_t)snprintf(b + o, sizeof b - o, " %08x/%g", w[i], f); }
+        fprintf(stderr, "[peek] %.4f %#llx%s\n", now / 1e9, (unsigned long long)a, b); return;
+    }
+    char *p = line + 8, path[1024]; int used = 0; if (sscanf(p, "%1023s %n", path, &used) != 1) runtime_fail("memsnap <path> <addr> <len> ...");
+    p += used; FILE *f = fopen(path, "wb"); if (!f) { fprintf(stderr, "[memsnap] cannot write %s\n", path); return; }
+    uint64_t hdr[2] = {now, (uintptr_t)runtime_module_base("main")}; fwrite(hdr, 8, 2, f);
+    static uint8_t page[0x4000]; uint64_t total = 0, unreadable = 0;
+    while (*p) {
+        char *e; uint64_t a = mem_addr(p, &e); if (e == p) break; p = e; uint64_t n = strtoull(p, &e, 16); if (e == p) break; p = e; while (*p == ' ') p++;
+        uint64_t h[2] = {a, n}; fwrite(h, 8, 2, f);
+        for (uint64_t o = 0; o < n; o += sizeof page) {
+            vm_size_t want = (vm_size_t)(n - o < sizeof page ? n - o : sizeof page), got = 0;
+            if (vm_read_overwrite(mach_task_self(), (vm_address_t)(a + o), want, (vm_address_t)page, &got) != KERN_SUCCESS || got != want) { memset(page, 0, want); unreadable += want; }
+            fwrite(page, 1, want, f); total += want;
+        }
+    }
+    fclose(f); fprintf(stderr, "[memsnap] %.4f %s: %llu bytes (%llu unreadable), main at %#llx\n", now / 1e9, path, (unsigned long long)total, (unsigned long long)unreadable, (unsigned long long)hdr[1]);
+}
 extern void runtime_front_request_close(void);
 static void *input_file(void *arg) {
     FILE *f = fopen((const char *)arg, "r"); if (!f) runtime_fail("cannot open TOTK_INPUT_FILE");
@@ -201,6 +236,8 @@ static void *input_file(void *arg) {
         } else if (!strncmp(line, "framestep ", 10)) {   /* "framestep <ms>": pin the real-time frame step, 0 = back to real time */
             char *end; double ms = strtod(line + 10, &end); if (end == line + 10 || ms < 0 || ms > 100) runtime_fail("framestep takes milliseconds (0 = real time)");
             runtime_frame_step_pin(ms);
+        } else if (!strncmp(line, "memsnap ", 8) || !strncmp(line, "peek ", 5)) {   /* diagnostics, see mem_diag below */
+            mem_diag(line);
         } else if (!strcmp(line, "threads\n")) {   /* every guest thread's wait state and guest return chain, now (a hang: what is each thread waiting for) */
             runtime_dump_threads();
         } else if (!strcmp(line, "close\n")) { runtime_front_request_close(); break; }

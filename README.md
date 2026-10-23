@@ -4,6 +4,8 @@ An early, work-in-progress native Mac port of your own copy of **Xenoblade Chron
 **1.0.1 or 2.0.0**.
 The port lives in [`games/xcx`](games/xcx).
 
+Landing page: <https://chinofyoung.github.io/XC-Native-Site/>
+
 This repository is a fork of [MacNativeGames](https://github.com/ly05010419/MacNativeGames). It builds on that project's
 native ports of Tears of the Kingdom, Breath of the Wild and Bayonetta 3 and on their shared runtime, and is released
 under the same MIT license. This fork holds only the Xenoblade Chronicles X port; the other games are in the original
@@ -246,11 +248,13 @@ the switches a terminal run needs.
 
 ### iPhone and iPad (experimental)
 
-`--platform ios` builds an unsigned IPA for sideloading. **It is experimental, and most of the picture is missing.** An
+`--platform ios` builds an unsigned IPA for sideloading. **It is experimental.** An
 iPhone or iPad cannot translate the game's shaders while it plays (there is no translator process on iOS), and this port
 does not translate them ahead of time yet. The IPA carries only the shader variants your Mac has already translated
-while you played the Mac app. Every other draw is skipped. The iOS app was built and its IPA checked, but it has not been
-run on a device. The iOS Simulator cannot run it: the graphics layer uses Metal 4, which the Simulator SDK does not have.
+while you played the Mac app. It runs at a smooth 30 fps on an iPhone 15 Pro Max in the first area, with the full picture
+there, because the IPA carries the shaders your Mac translated while you played that area. Anywhere you have not played
+on the Mac, draws whose shaders were not carried are skipped; nothing past the first area has been tested on iPhone.
+The iOS Simulator cannot run it: the graphics layer uses Metal 4, which the Simulator SDK does not have.
 
 Requirements:
 
@@ -308,8 +312,7 @@ Documents. The log is `log.txt` there, which you can read in the Files app (On M
 
 Shaders the device misses are listed in `shader-list-contribution.txt` and saved as requests in Documents. With the
 device connected, `python3 games/xcx/ios/tools/fill_shaders.py --work <work folder> --device <id>` translates them on
-the Mac and sends them to the device, and later IPA builds carry them too. Like the rest of the iOS path, this tool has
-not been run against a device.
+the Mac and sends them to the device, and later IPA builds carry them too. This tool has not been run against a device.
 
 ## Controls
 
@@ -362,8 +365,10 @@ Extra keys:
   a new install translates each shader the first time it is drawn.
 - The NSP path (a base NSP with an update NSP) has been checked with an update NSP only; the port was played from the
   XCI.
-- The iPhone / iPad build (`--platform ios`) is experimental and untested on a device. Most of its picture is missing until
-  shaders are translated ahead of time; see [iPhone and iPad](#iphone-and-ipad-experimental).
+- The iPhone / iPad build (`--platform ios`) is experimental; it runs at a smooth 30 fps on an iPhone 15 Pro Max in the
+  first area, with the full picture there, because the IPA carries the shaders your Mac translated while you played that area.
+  Anywhere you have not played on the Mac, draws whose shaders were not carried are skipped, and nothing past the first
+  area has been tested on iPhone; see [iPhone and iPad](#iphone-and-ipad-experimental).
 
 ## How it works
 

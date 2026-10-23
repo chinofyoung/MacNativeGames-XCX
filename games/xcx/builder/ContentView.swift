@@ -384,6 +384,10 @@ struct ResultView: View {
                          + "space returns only once the app is deleted too.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Text(out.hasSuffix(".ipa")
+                     ? "Frame rate: 30 (the game's own) by default; Settings › Xenoblade Chronicles X › Frame rate offers 60 (experimental)."
+                     : "Frame rate: 30 (the game's own) by default; the app's settings window offers 60 (experimental).")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("The app holds the game: keep it for your own use and never share it.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {

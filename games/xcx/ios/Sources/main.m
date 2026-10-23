@@ -254,7 +254,15 @@ static void lifecycle_observe(void) {
     for (NSString *name in @[@"TOTK_GPU_ALLOW_SUBMIT",@"TOTK_GPU_WIDEN",@"TOTK_GPU_BLOCKRT",@"TOTK_GPU_MIDCLEAR"]) setenv(name.UTF8String,"1",1);
     setenv("DM_PRESENT_LINK_FALLBACK","1",1);
     setenv("TOTK_SLOT_OWNER","user",0); setenv("TOTK_SLOT_PURPOSE","player",0);
-    unsetenv("TOTK_AUTOLOAD"); unsetenv("TOTK_HEADLESS"); unsetenv("XCX_PATCHES");   // code patches are fixed at build time on iOS
+    unsetenv("TOTK_AUTOLOAD"); unsetenv("TOTK_HEADLESS");
+    /* Code patches are fixed at build time on iOS: the IPA's main text carries the 60 fps patch's sites (build_ipa.py
+       exports it with XCX_PATCHES=60fps), so the runtime checks them and the Settings switch (Settings.bundle ›
+       XCX_FRAME_RATE, 30 by default) only picks the values it reads: XCX_FPS60=0 keeps the game's vsync count 2 and its
+       own frame time, i.e. the original 30 fps. A launch environment value (devicectl --environment-variables) wins. */
+    setenv("XCX_PATCHES", "60fps", 1);
+    { NSString *fr = [NSUserDefaults.standardUserDefaults stringForKey:@"XCX_FRAME_RATE"];
+      setenv("XCX_FPS60", fr.integerValue == 60 ? "1" : "0", 0);
+      fprintf(stderr, "[xcx] frame rate setting: %s (XCX_FPS60=%s)\n", fr.length ? fr.UTF8String : "30 (default)", getenv("XCX_FPS60")); }
     chdir(docs.fileSystemRepresentation);
     host_argv[0] = strdup("XCX"); host_argv[1] = strdup(res.fileSystemRepresentation); host_argv[2] = strdup("boot");
     return YES;   // the window is made when the window scene connects (XCXSceneDelegate)

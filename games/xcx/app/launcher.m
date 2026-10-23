@@ -14,15 +14,18 @@
    The self-contained mode is used when Contents/Resources/xcx holds the game binary and XCX_WORK is not set.
    Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
    What each setting does in the runtime:
-   - Frame rate and internal resolution are the game's own (30 fps; dynamic, up to 1600x900), on a 60 Hz present base
-     (DM_PRESENT_HZ=60, what the 30 fps presets always set).
+   - Frame rate: 30 (the game's own; the default) or 60 (experimental): the port's 60 fps patch (XCX_PATCHES=60fps,
+     runtime/game_patches.c: the game's vsync count 2 -> 1 and its frame time measured; not part of the presets, saved as
+     "frame_rate"; XCX_FRAME_RATE=30|60 from the environment wins for one start, for scripted checks). Either way on a 60 Hz
+     present base (DM_PRESENT_HZ=60) with the game's present interval 1. The internal resolution is the game's own
+     (dynamic, up to 1600x900).
    - Monitor (XCX_DISPLAY), window or full screen (XCX_FULLSCREEN), window size (TOTK_WINDOW_SIZE), the full-screen
      output resolution (TOTK_DRAWABLE_SCALE relative to the monitor's pixels) and the scaler (MetalFX spatial upscaling of
      the game's picture to the output, TOTK_MFX_UPSCALE / TOTK_MFX_OUTPUT, or plain linear scaling).
    - The RomFS interface mod; the FPS / resolution HUD.
    Player exefs patches (scripts/prepare_patches.py -> <game folder>/patches/<slug>.tsv) have no setting: XCX_PATCHES
-   from the environment (open --env XCX_PATCHES=<slug>,<slug> <app>) reaches the runtime unchanged
-   (runtime/game_patches.c); unset, none is applied.
+   from the environment (open --env XCX_PATCHES=<slug>,<slug> <app>) reaches the runtime (runtime/game_patches.c), with
+   60fps added when the frame rate is 60; unset and at 30 fps, none is applied.
    Progress: the player's profile (account, saves, pseudo device id, pipeline list) is in Application Support
    (MacNativeGames/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
    terminal runs use), so Continue loads the same save; the originals are never moved or changed (development apps
@@ -83,7 +86,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 
 @interface Launcher : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property NSWindow *window;
-@property NSPopUpButton *preset, *size, *monitor, *output, *mod;
+@property NSPopUpButton *preset, *size, *monitor, *output, *mod, *fps;
 @property NSSegmentedControl *display, *scaler;
 @property NSButton *hud, *play; @property NSTextField *note;
 @property NSArray<NSString *> *mods; @property BOOL applying, launch;
@@ -114,6 +117,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     self.output = [NSPopUpButton new]; self.output.target = self; self.output.action = @selector(changed:);
     self.scaler = [self segments:@[T("MetalFX (más nítido)", "MetalFX (sharper)"), T("Normal", "Plain")]];
     self.mod = [self popup:@[T("Ninguno", "None")]]; self.mods = romfs_mods(); [self.mod addItemsWithTitles:self.mods];
+    self.fps = [self popup:@[T("30 (original)", "30 (original)"), T("60 (experimental)", "60 (experimental)")]];
     self.hud = [NSButton checkboxWithTitle:T("Mostrar FPS y resolución (tecla 1 lo oculta)", "Show FPS and resolution (key 1 hides it)") target:self action:@selector(changed:)];
     self.note = [NSTextField wrappingLabelWithString:@""]; self.note.textColor = NSColor.secondaryLabelColor; self.note.font = [NSFont systemFontOfSize:11];
     self.play = [NSButton buttonWithTitle:T("Jugar", "Play") target:self action:@selector(start:)]; self.play.keyEquivalent = @"\r";
@@ -121,6 +125,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 
     NSGridView *grid = [NSGridView gridViewWithViews:@[
         @[[self label:T("Preset", "Preset")], self.preset],
+        @[[self label:T("Imágenes por segundo", "Frame rate")], self.fps],
         @[[self label:T("Monitor", "Monitor")], self.monitor],
         @[[self label:T("Pantalla", "Display")], self.display],
         @[[self label:T("Tamaño de la ventana", "Window size")], self.size],
@@ -168,6 +173,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     for (NSUInteger i = 0; i < all.count; i++) if (m && [screen_name(all[i]) isEqualToString:m]) mi = i;
     [self.monitor selectItemAtIndex:(NSInteger)mi];
     self.hud.state = [d objectForKey:@"hud"] ? [d boolForKey:@"hud"] : YES;
+    [self.fps selectItemAtIndex:[d integerForKey:@"frame_rate"] == 60 ? 1 : 0];
     NSString *mod = [d stringForKey:@"mod"]; NSUInteger i = mod ? [self.mods indexOfObject:mod] : NSNotFound;
     [self.mod selectItemAtIndex:i == NSNotFound ? 0 : (NSInteger)i + 1];
 }
@@ -187,7 +193,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 - (void)presetChanged:(id)sender { (void)sender; NSInteger i = self.preset.indexOfSelectedItem; if (i < NPRESETS) [self applyPreset:(int)i]; [self refresh]; [self save]; }
 - (void)monitorChanged:(id)sender { (void)sender; [self fillOutputs:(int)self.output.selectedItem.tag]; [self refresh]; [self save]; }
 - (void)changed:(id)sender {
-    if (!self.applying && sender != self.hud && sender != self.mod) [self.preset selectItemAtIndex:NPRESETS];
+    if (!self.applying && sender != self.hud && sender != self.mod && sender != self.fps) [self.preset selectItemAtIndex:NPRESETS];
     [self refresh]; [self save];
 }
 - (void)refresh {
@@ -200,6 +206,9 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
         else [s appendString:T("Esta app no contiene el juego: vuelve a crearla con build_app.py.", "This app does not hold the game: build it again with build_app.py.")];
         self.play.enabled = NO;
     }
+    if (self.fps.indexOfSelectedItem == 1)
+        [s appendString:T("60 imágenes por segundo es experimental: el juego va a la velocidad correcta también por debajo de 60, pero algunos efectos y animaciones pueden ir algo lentos entonces. En un Mac lento la GPU no llega a 60.",
+                          "60 fps is experimental: the game keeps its speed below 60 too, but some effects and animations can run a little slow then. A slower Mac's GPU does not reach 60.")];
     self.note.stringValue = s; self.note.hidden = !s.length;
 }
 - (void)save {
@@ -209,6 +218,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     [d setInteger:self.output.selectedItem.tag forKey:@"output"]; [d setBool:self.scaler.selectedSegment == 0 forKey:@"metalfx"];
     [d setObject:screen_name(self.chosenScreen) forKey:@"monitor"];
     [d setBool:self.hud.state forKey:@"hud"];
+    [d setInteger:self.fps.indexOfSelectedItem == 1 ? 60 : 30 forKey:@"frame_rate"];
     if (self.mod.indexOfSelectedItem > 0) [d setObject:self.mods[self.mod.indexOfSelectedItem - 1] forKey:@"mod"]; else [d removeObjectForKey:@"mod"];
     CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // the launcher then replaces itself with the game (exec)
 }
@@ -273,8 +283,16 @@ int main(int argc, char **argv) {
         }
         if (chdir(work.fileSystemRepresentation)) { fail(work); return 1; }   // the runtime reads extracted/ and rewritten/ relative to it
 
-        /* XCX_PATCHES is left as the environment has it (none when unset; see the comment at the top). */
-        setenv("DM_PRESENT_HZ", "60", 1);   // the 30 fps presets' present base, as before the frame-rate setting was removed
+        /* Frame rate 60: the port's 60 fps patch, added to the player's own XCX_PATCHES (see the comment at the top). */
+        const char *fr = getenv("XCX_FRAME_RATE");
+        BOOL fps60 = fr && *fr ? atoi(fr) == 60 : [d integerForKey:@"frame_rate"] == 60;
+        if (fps60) {
+            const char *had = getenv("XCX_PATCHES");
+            NSString *list = had && *had ? @(had) : @"";
+            if (![[list componentsSeparatedByString:@","] containsObject:@"60fps"]) list = list.length ? [list stringByAppendingString:@",60fps"] : @"60fps";
+            setenv("XCX_PATCHES", list.UTF8String, 1);
+        }
+        setenv("DM_PRESENT_HZ", "60", 1);   // the present base at both frame rates: the game presents with interval 1, its own cap paces it
 
         NSArray<NSScreen *> *all = NSScreen.screens; NSUInteger mi = [all indexOfObject:NSScreen.mainScreen];
         if (mi == NSNotFound) mi = 0;
@@ -323,6 +341,7 @@ int main(int argc, char **argv) {
                   work.UTF8String, image.stringByResolvingSymlinksInPath.UTF8String,
                   bundled ? cache.UTF8String : "next to the game binary (build/shader-cache)"); }
         fprintf(stderr, "[launcher] game version %s (%s)\n", TOTK_GAME_VERSION, TOTK_GAME_DIR);
+        fprintf(stderr, "[launcher] frame rate %d (%s)\n", fps60 ? 60 : 30, fr && *fr ? "XCX_FRAME_RATE" : "setting");
         fprintf(stderr, "[launcher] work %s, patches %s, present %s Hz, display %s, fullscreen %s, window %s, drawable scale %s, MetalFX %s, mod %s\n",
                 work.UTF8String, getenv("XCX_PATCHES") ?: "none", getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
                 getenv("TOTK_DRAWABLE_SCALE") ?: "1", getenv("TOTK_MFX_OUTPUT") ? "on" : "off", getenv("TOTK_ROMFS_MODS"));

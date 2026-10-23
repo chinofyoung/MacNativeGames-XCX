@@ -30,3 +30,6 @@ personal/
 /XCX_build/
 /XCX_build_*/
 docs/screenshots/
+
+# landing page
+.superpowers/

@@ -4302,6 +4302,26 @@ static void canvas_learn(MTL4RenderPassDescriptor *pd) {
             g_mfx.last_c0 = t0->serial;
     }
 }
+#ifdef GAME_XCX
+/* XCX_CAMLOG=1 (diagnostic, off by default; measures game speed for the 60 fps patch): with frame interpolation off, the
+   G-buffer pass is found as for MetalFX (three or more colour targets and a depth of their size) and the camera position
+   (inverse view, floats 47 / 51 / 55 of the scene block at vertex uniform 0) of its first draw that binds the block is
+   logged once a frame with the host time: "[camlog] F<frame> <seconds> <x> <y> <z>". The camera follows the player, so
+   its path over a scripted walk gives the walking speed in metres a second at any frame rate. */
+static int g_camlog_want; static long g_camlog_frame = -1;
+static int camlog_level(void) { static int on = -1; if (on < 0) { const char *e = getenv("XCX_CAMLOG"); on = e ? atoi(e) : 0; } return on; }
+static int camlog_on(void) { return camlog_level() > 0; }
+static void xcx_camlog_pass(MTL4RenderPassDescriptor *pd) {
+    if (!camlog_on()) return;
+    long f = (long)atomic_load(&g_cur_frame); if (f == g_camlog_frame) return;
+    id<MTLTexture> c0 = R.rt.n > 0 && R.rt.color[0] ? pd.colorAttachments[0].texture : nil, dt = pd.depthAttachment.texture;
+    if (!dt || !c0 || !MFX_DEPTH_FMT_OK(dt.pixelFormat) || dt.width != c0.width || dt.height != c0.height || dt.width < 320) return;
+    int nc = 0; for (int i = 0; i < R.rt.n && i < 8; i++) nc += pd.colorAttachments[i].texture != nil;
+    if (nc >= 3) g_camlog_want = 1;
+}
+static int camlog_level(void);
+static void xcx_camlog_take(void);
+#endif
 static void mfx_pass_setup(MTL4RenderPassDescriptor *pd) {
     canvas_learn(pd);
     const tex_t *t0 = R.rt.n > 0 ? R.rt.color[0] : NULL;
@@ -4564,6 +4584,9 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex(int clear_only) {
     ser_gate();
     if (mfx_enabled()) mfx_pass_setup(pd);   // TOTK: MetalFX scene / UI attachments, G-buffer depth
     else if (uw_ratio()) canvas_learn(pd);   // ultrawide: the canvas the UI is squeezed in
+#ifdef GAME_XCX
+    else xcx_camlog_pass(pd);   // XCX_CAMLOG diagnostic (off by default): the camera position of each frame
+#endif
     g_enc = enc_r_begin(pd);
     if (!g_enc) g_rpb_why = 3;
     args_dirty_all();
@@ -9407,6 +9430,20 @@ static void xcx_mfx_camera(const float *b, float *cam) {
     }
 }
 #endif
+#ifdef GAME_XCX
+static void xcx_camlog_take(void) {
+    const p_bind_buf *u = &S.ubo[0][MFX_CAM_SLOT];
+    if (!(u->addr && u->size == MFX_CAM_SIZE)) return;
+    float blk[MFX_CAM_SIZE / 4]; pend_materialize(u->addr, (uint8_t *)blk, sizeof blk, 0);
+    g_camlog_want = 0; g_camlog_frame = (long)atomic_load(&g_cur_frame);
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    MLOG("[camlog] F%ld %.4f %.3f %.3f %.3f", g_camlog_frame, ts.tv_sec + ts.tv_nsec * 1e-9, blk[47], blk[51], blk[55]);
+    static double last_dump; double now = ts.tv_sec + ts.tv_nsec * 1e-9;   // XCX_CAMLOG=2: the whole block once a second too
+    if (camlog_level() >= 2 && now - last_dump >= 1.0) { last_dump = now; char b[192 * 16]; size_t o = 0;
+        for (int i = 0; i < MFX_CAM_SIZE / 4 && o < sizeof b - 20; i++) o += (size_t)snprintf(b + o, sizeof b - o, " %.7g", blk[i]);
+        MLOG("[camlog] block F%ld %.4f%s", g_camlog_frame, now, b); }
+}
+#endif
 static void draw_inner(const p_draw *dw, const p_draw_idx *di);
 /* Diagnostic DM_NVN_NANDRAW=<first>-<last frame> (log DM_NVN_NANDRAW_LOG, default analysis/nandraw.tsv): after every
    draw into a full-size RG11B10F or R32F colour attachment (the HDR target, the linear depth), end the pass and count
@@ -10153,6 +10190,9 @@ frz_plain:;
         if (r != g_mfx.role) { g_mfx.role = r; g_pso_dirty = 1; }
     }
     if (g_mfx.want_cam) mfx_take_camera();
+#ifdef GAME_XCX
+    if (g_camlog_want) xcx_camlog_take();
+#endif
     if (defer_q_draw) defer_replay();
     if (skip_d) { g_stat_ds_omit++; if (mode == 3) g_stat_s_only++; else if (mode == 4) g_stat_d_only++; }
     // 管线只依赖（程序, 通道目标, 混合 / 颜色 / 写掩码 / 多重采样状态, 顶点布局）：这些没变就沿用上次的
