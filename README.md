@@ -83,19 +83,19 @@ The full work log, with what was found, what was changed and how each step was c
 
 There is no one-command build yet. For now the port is built with the steps below, all run from `games/xcx`.
 
-The examples keep the XCI, `prod.keys` and the work folder in `nsw/` at the repository root, which git ignores. Any
-other place works; keep the work folder out of the repository's tracked files.
+The examples keep the XCI and `prod.keys` in `personal/` and the work folder in `XCX_build/`, both at the repository
+root, where git ignores them. Any other place works; keep the work folder out of the repository's tracked files.
 
 ### 1. Set up
 
 ```sh
 cd games/xcx
-python3 -m venv ../../nsw/XCX_build/venv
-../../nsw/XCX_build/venv/bin/pip install -r requirements.txt unicorn
-PY=../../nsw/XCX_build/venv/bin/python
-WORK=../../nsw/XCX_build
-XCI="../../nsw/Xenoblade Chronicles X Definitive Edition.xci"
-KEYS=../../nsw/prod.keys
+python3 -m venv ../../XCX_build/venv
+../../XCX_build/venv/bin/pip install -r requirements.txt unicorn
+PY=../../XCX_build/venv/bin/python
+WORK=../../XCX_build
+XCI="../../personal/Xenoblade Chronicles X Definitive Edition.xci"
+KEYS=../../personal/prod.keys
 ```
 
 ### 2. Extract and rewrite the code, extract the data

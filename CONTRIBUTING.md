@@ -8,8 +8,8 @@ The log's Status table and its newest entries say what is being worked on and wh
 
 - Never commit game content: no game program or code, RomFS files, art, text, audio, movies, translated shaders or
   libraries, keys or saves. Screenshots show game imagery and stay local (`docs/screenshots/` is ignored by git).
-- Keep game files, keys and work folders where git ignores them (`nsw/` at the repository root, or `XCX_build/` and
-  `mods/` in `games/xcx`). Check `git status` before every commit.
+- Keep game files, keys and work folders where git ignores them (`personal/` and `XCX_build/` at the repository root, or
+  `XCX_build/` and `mods/` in `games/xcx`). Check `git status` before every commit.
 - The repository is MIT. Write your own code. Do not copy GPL code or code from other mods; reading them for ideas is
   fine. Third-party code you bring in keeps its license, and its source and license go into
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

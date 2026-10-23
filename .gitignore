@@ -10,12 +10,15 @@ __pycache__/
 *.xcz
 *.bfttf
 *.sav
-# build output (the work folder normally lives next to the card image)
+# build output (the app is built into the work folder)
 *.app/
 # the shader translator's .NET build folders (games/xcx/tools/totk_xlate/publish_native.sh builds in a temporary folder;
 # these appear only when the project is built in place)
 games/xcx/tools/totk_xlate/obj/
 games/xcx/tools/totk_xlate/bin/
-# local game folder (XCI, keys, work folders) and screenshots of game imagery
+# personal files (XCI, keys, firmware), the work folder and screenshots of game imagery;
+# nsw/ is the old name of personal/ (it held the work folder too)
+personal/
+/XCX_build/
 nsw/
 docs/screenshots/

@@ -29,13 +29,13 @@ this repository; `XCX_build/` (the work folder) and `mods/` are ignored by git.
 ## Stage 1 (done)
 
 From `games/xcx`, with a Python environment made from `requirements.txt` in this folder plus `unicorn` for `equiv.py`
-(`PY=<that python>`). The work folder sits next to the game file, as `TOTK_build` does, so the commands pass it as
-`WORK`:
+(`PY=<that python>`). The game file and keys are in `personal/` and the work folder is `XCX_build/`, both at the
+repository root (ignored by git); the commands pass the work folder as `WORK`:
 
 ```sh
-WORK=../../nsw/XCX_build
-XCI="../../nsw/Xenoblade Chronicles X Definitive Edition.xci"
-KEYS=../../nsw/prod.keys
+WORK=../../XCX_build
+XCI="../../personal/Xenoblade Chronicles X Definitive Edition.xci"
+KEYS=../../personal/prod.keys
 $PY scripts/extract_code.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/exefs
 $PY scripts/merge_romfs.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/romfs
 $PY scripts/romfs_control.py "$XCI" --keys $KEYS          # negative control: two flipped bytes must be caught
@@ -72,7 +72,7 @@ After stage 1, from `games/xcx`, with the same `WORK` and `PY`:
 
 ```sh
 # System fonts (the game's partitions have none): the six fonts any firmware carries, e.g. TotK's verified extraction
-mkdir -p $WORK/extracted/firmware && cp -R ../../nsw/TOTK_build/totk/extracted/firmware/shared-fonts $WORK/extracted/firmware/
+mkdir -p $WORK/extracted/firmware && cp -R <TotK work folder>/totk/extracted/firmware/shared-fonts $WORK/extracted/firmware/
 make prepare WORK=$WORK PY=$PY       # tables, RomFS index, fonts config; every input checked against assets/expected-v1.0.1.json
 make runtime WORK=$WORK              # $WORK/build/xcx-native
 make shader-tools WORK=$WORK         # the shader translator and SPIRV-Cross the graphics layer starts on first use
@@ -110,7 +110,7 @@ make app WORK=$WORK PY=$PY GAME="$PWD/$XCI" KEYS="$PWD/$KEYS"   # -> $WORK/Xenob
 make install WORK=$WORK                                         # optional: a copy in /Applications or ~/Applications
 ```
 
-Launch it like any Mac app: double-click `nsw/XCX_build/Xenoblade Chronicles X.app` in Finder (or `open` it). A
+Launch it like any Mac app: double-click `XCX_build/Xenoblade Chronicles X.app` in Finder (or `open` it). A
 settings window comes first; Play starts the game with the switches the terminal runs set by hand
 (`TOTK_GPU_ALLOW_SUBMIT=1` and the rest), the game's own 30 fps, the compact HUD, MetalFX upscaling and frame
 interpolation off (key 2 still toggles interpolation; on an M1 it costs real frames). The app does not hold the game: it

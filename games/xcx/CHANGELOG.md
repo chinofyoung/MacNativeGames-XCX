@@ -615,3 +615,24 @@ fits, the high end does not; it was not re-measured.
 Logs: `nsw/XCX_build/logs/stage5/` (`b*` baselines, `s*` short baselines, `x*` measurement-only switches, `p*` pass
 profiles, `ab*` same-process A/B, `st1` pass structure, `fb*` / `fe*` final runs). Commits: none; this checkout is not a
 git repository.
+
+### 2026-10-23: local folders moved
+
+The `nsw/` paths in the entries above are the old layout. The personal files (XCI, `prod.keys`, `title.keys`, `fw/`,
+`fw.zip`) moved from `nsw/` to `personal/`, and the work folder from `nsw/XCX_build/` to `XCX_build/`, both at the
+repository root and ignored by git (`nsw/` is gone; the ignore line stays for old checkouts). Moved with `mv`, nothing
+copied or deleted. Since the runtime and the app hold absolute paths of the work folder, these were redone from the new
+place:
+
+- `make prepare runtime WORK=../../XCX_build PY=<abs>/XCX_build/venv/bin/python`: `shared_fonts_config.h` held the old
+  font paths, so the binary changed (`build/xcx-native` sha256 `fbc19c8e...`, was `fecb7e29...`; same sources, clear
+  sinking).
+- `make app WORK=../../XCX_build PY=... GAME=<abs>/personal/<XCI> KEYS=<abs>/personal/prod.keys`: Info.plist's
+  `XCXWorkFolder` names the new folder.
+- The venv's `bin/` scripts and `pyvenv.cfg` had the old path written into them and were pointed at the new one;
+  `venv/bin/python` itself worked unchanged.
+
+Checked with `XCX_build/tools/app5.sh` (150 s limit, log `XCX_build/logs/stage5/m1_move.log`): the profile in
+Application Support was not seeded again, the RomFS record was reused (no re-hash), the shader cache was reused (0 new
+shaders), the save loaded into Primordia, no failure lines, and the profile's ten files are byte-identical after the
+run. The run also logged real keyboard input from the user.
