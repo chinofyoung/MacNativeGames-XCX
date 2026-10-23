@@ -89,6 +89,30 @@ The examples keep the XCI and `prod.keys` in `personal/` at the repository root,
 place works; keep game files, work folders and apps out of the repository's tracked files (`XCX_build/` and any
 `XCX_build_*/` at the root are ignored too).
 
+### The window (easiest)
+
+From the repository root:
+
+```sh
+python3 build_app.py --gui
+```
+
+This opens **Xenoblade Chronicles X Builder**, a small native window:
+
+- Choose your game file (the XCI, or a base NSP and then the 1.0.1 update NSP), your `prod.keys`, and optionally
+  `title.keys` and a firmware folder.
+- The output defaults to `Xenoblade Chronicles X.app` next to the game file. Pick *iPhone and iPad (experimental)* to
+  build the IPA instead (see below). *Advanced* chooses another work folder.
+- The *Prerequisites* panel checks this Mac and lists anything missing, with the command that installs it.
+- **Build App** shows each step with its time and the log. **Cancel** stops cleanly, and the next build continues from
+  the last finished step. At the end, **Open App** or **Show in Finder**. If the build stops, the window names the step
+  and the file.
+
+The window remembers your choices. It never shows or logs key values. The first time, `--gui` compiles the window from
+[`games/xcx/builder`](games/xcx/builder) with `xcrun swiftc` into `~/Library/Caches/MacNativeGames/xcx-builder` (a few
+seconds). The Xcode command line tools are enough, and nothing ready-made is downloaded. The window runs the same
+`build_app.py` as the command below.
+
 ### One command
 
 From the repository root:
@@ -103,7 +127,8 @@ and `-o <path>.app` choose other places.
 For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.nsp> --firmware <firmware folder>`
 (add `--title-keys title.keys` for NSPs without a common ticket).
 
-- `python3 build_app.py --help` lists every option.
+- `python3 build_app.py --help` lists every option. `python3 build_app.py --check-requirements` (add `--platform ios`
+  for the IPA) checks this Mac without building anything and prints a fix for anything missing.
 - The build checks the Mac first (macOS version, Apple silicon, the developer tools, Homebrew's `opus` and `libvpx`,
   Python 3.14), then recognises the game by the title IDs and versions inside the files, never by their names: another
   game, the update given as the game, a base-only XCI without `--update`, or another version stops it with a message.

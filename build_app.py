@@ -51,6 +51,15 @@ and the IPA. It needs Xcode 26 or later with the iOS SDK, xcodegen and CMake (br
 carries no game image: the 14.3 GB RomFS is installed once into the app's Documents (ios/tools/install_device.py
 --game-data, or Finder's file sharing). Shaders are not translated ahead of time yet and a phone cannot translate them,
 so only the variants this Mac has already translated are carried and most of the picture is missing.
+
+    python3 build_app.py --gui
+
+opens a window that does the same without the command line (games/xcx/builder: a small SwiftUI app, compiled with
+xcrun swiftc on first use into ~/Library/Caches/MacNativeGames/xcx-builder, and again when its sources change). The
+window runs this script with --progress json: one JSON object a line on stdout (the steps, each start and end with
+its time, the error with the step it stopped at, the output), the human output on stderr; SIGTERM then cancels the
+build cleanly (the work folder is resumable). --check-requirements [--platform ios] reports every requirement with
+what to do about the missing ones (also with --progress json), for the window's prerequisites panel.
 """
 import argparse
 import contextlib
@@ -61,6 +70,7 @@ import os
 import platform
 import plistlib
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -110,11 +120,58 @@ NINTENDO_ACID_MODULUS = bytes.fromhex(
 
 
 class BuildError(Exception):
-    pass
+    """A build stops with what is wrong; fixes: commands that put a missing requirement right; log: the step's log."""
+    def __init__(self, msg, fixes=(), log=None):
+        super().__init__(msg)
+        self.fixes, self.log = list(fixes), log
+
+
+class Cancelled(KeyboardInterrupt):
+    """SIGTERM in --progress json mode (the window's Cancel): stops the build like Ctrl-C."""
 
 
 def say(msg):
     print(f'[{time.strftime("%H:%M:%S")}] {msg}', flush=True)
+
+
+# ---- --progress json (the window, games/xcx/builder) ----
+EVENTS = None        # the real stdout, for one JSON object a line, when --progress json; None otherwise
+CURRENT = [None]     # the step running now, for the error event
+_critical = dict(depth=0, pending=False)
+
+
+def emit(event, **fields):
+    """One progress event (--progress json only); never carries key values, only paths, names and messages."""
+    if EVENTS is not None:
+        EVENTS.write(json.dumps(dict(event=event, time=round(time.time(), 3), **fields)) + '\n')
+        EVENTS.flush()
+
+
+def progress_json():
+    """Events on stdout, everything else (say, tracebacks, child output) on stderr, and SIGTERM as a clean cancel."""
+    global EVENTS
+    EVENTS = sys.stdout
+    sys.stdout = sys.stderr
+
+    def cancel(signum, frame):
+        if _critical['depth']:
+            _critical['pending'] = True
+        else:
+            raise Cancelled()
+    signal.signal(signal.SIGTERM, cancel)
+
+
+@contextlib.contextmanager
+def critical():
+    """A cancel arriving while the installed app is being replaced takes effect after it, not halfway through."""
+    _critical['depth'] += 1
+    try:
+        yield
+    finally:
+        _critical['depth'] -= 1
+    if not _critical['depth'] and _critical['pending']:
+        _critical['pending'] = False
+        raise Cancelled()
 
 
 def run(cmd, log, cwd=None, env=None, quiet=True, timeout=None):
@@ -131,13 +188,33 @@ def run(cmd, log, cwd=None, env=None, quiet=True, timeout=None):
         threading.Thread(target=beat, daemon=True).start()
     try:
         with open(log, 'w') as f:
-            p = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
+            if EVENTS is None:
+                p = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
+            else:   # its own process group, so that a cancel stops make's jobs and the tools' workers too
+                p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    p.wait(timeout=timeout)
+                except BaseException:
+                    stop_group(p)
+                    raise
     finally:
         done.set()
     if p.returncode:
         tail = log.read_text(errors='replace').splitlines()[-25:]
         name = Path(cmd[1] if Path(cmd[0]).name.startswith('python') else cmd[0]).name
-        raise BuildError(f'{name} failed (exit {p.returncode}); full output: {log}\n' + '\n'.join(tail))
+        raise BuildError(f'{name} failed (exit {p.returncode}); full output: {log}\n' + '\n'.join(tail), log=log)
+
+
+def stop_group(p):
+    """SIGTERM to a step's process group, SIGKILL if it is still there after 10 s."""
+    for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(p.pid, sig)
+        try:
+            p.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def sha256(path):
@@ -177,14 +254,24 @@ TIMES = []   # (step, seconds, 'built' | 'reused' | 'checked')
 
 
 @contextlib.contextmanager
-def timed(name):
+def timed(name, record=True):
     """Time one step; the step says whether it did the work (state['built'] = True), reused what was there (False), or
-    only checks (a string: how it is reported)."""
+    only checks (a string: how it is reported). record=False: a progress event only, not in the step times."""
     state = dict(built=False)
     t0 = time.time()
-    yield state
-    TIMES.append((name, time.time() - t0, state['built'] if isinstance(state['built'], str) else
-                  'built' if state['built'] else 'reused'))
+    CURRENT[0] = name
+    emit('step', step=name, status='running')
+    try:
+        yield state
+    except BaseException as e:
+        emit('step', step=name, status='cancelled' if isinstance(e, KeyboardInterrupt) else 'failed',
+             seconds=round(time.time() - t0, 1))
+        raise
+    how = state['built'] if isinstance(state['built'], str) else 'built' if state['built'] else 'reused'
+    if record:
+        TIMES.append((name, time.time() - t0, how))
+    CURRENT[0] = None
+    emit('step', step=name, status=how, seconds=round(time.time() - t0, 1))
 
 
 def say_times(work, total):
@@ -386,39 +473,83 @@ def source_matches(manifest, source):
 
 
 # ---- requirements ----
-def prerequisites():
-    """The Mac's tools, checked at the start with what to do about each one missing (from the original project's)."""
+SELECT_XCODE = 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer'
+
+
+def req_apple_silicon():
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         raise BuildError('needs a Mac with Apple silicon (this is '
                          f'{platform.system()} on {platform.machine()})')
+
+
+def req_macos():
     release = platform.mac_ver()[0]
     if int(release.split('.')[0] or 0) < 26:
         raise BuildError(f'needs macOS 26 or later; this is macOS {release}')
+    return f'macOS {release}'
+
+
+def req_clang():
     if subprocess.run(['xcrun', '--find', 'clang'], capture_output=True).returncode:
-        raise BuildError('the Xcode command line tools are missing: xcode-select --install')
+        raise BuildError('the Xcode command line tools are missing: xcode-select --install', ['xcode-select --install'])
+    return subprocess.run(['xcode-select', '-p'], capture_output=True, text=True).stdout.strip() or None
+
+
+def req_cxx():
     cxx = subprocess.run(['xcrun', 'clang++', '-std=c++11', '-x', 'c++', '-fsyntax-only', '-'], input='#include <string>\n',
                          capture_output=True, text=True)
     if cxx.returncode:   # SPIRV-Cross is C++; without the SDK's libc++ headers it fails much later
         raise BuildError('clang++ finds no C++ standard library headers, so the developer tools or their SDK are incomplete. '
-                         'With Xcode: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer; with the command line '
+                         f'With Xcode: {SELECT_XCODE}; with the command line '
                          'tools only: sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install. '
-                         f'clang++ said: {cxx.stderr.strip()[:300]}')
+                         f'clang++ said: {cxx.stderr.strip()[:300]}',
+                         [SELECT_XCODE, 'sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install'])
+
+
+def req_objdump():
     if subprocess.run(['xcrun', '--find', 'llvm-objdump'], capture_output=True).returncode:
         raise BuildError('llvm-objdump not found (xcrun --find llvm-objdump): the rewrite check needs it; install Xcode '
-                         'and select it: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer')
+                         f'and select it: {SELECT_XCODE}', [SELECT_XCODE])
+
+
+def req_tools():
     for tool in ('make', 'codesign', 'git', 'rsync'):
         if not shutil.which(tool, path=os.pathsep.join(TOOL_PATHS + ['/usr/bin', '/bin'])):
-            raise BuildError(f'{tool} not found: xcode-select --install')
+            raise BuildError(f'{tool} not found: xcode-select --install', ['xcode-select --install'])
+
+
+def req_homebrew():
     brew = Path('/opt/homebrew/opt')   # the Makefile links these static libraries
     missing = [p for p, lib in (('opus', 'libopus.a'), ('libvpx', 'libvpx.a')) if not (brew / p / 'lib' / lib).is_file()]
     if missing:
-        raise BuildError(f'Homebrew packages missing: brew install {" ".join(missing)} (https://brew.sh for Homebrew)')
+        raise BuildError(f'Homebrew packages missing: brew install {" ".join(missing)} (https://brew.sh for Homebrew)',
+                         [f'brew install {" ".join(missing)}'])
+
+
+def req_python():
     py = next((p for p in (shutil.which(n, path=os.pathsep.join(TOOL_PATHS)) for n in ('python3.14', 'python3.15')) if p), None)
     if not py and sys.version_info >= (3, 14):
         py = sys.executable
     if not py:
-        raise BuildError('Python 3.14 not found (games/xcx/requirements.txt is pinned for it): brew install python@3.14')
+        raise BuildError('Python 3.14 not found (games/xcx/requirements.txt is pinned for it): brew install python@3.14',
+                         ['brew install python@3.14'])
     return Path(py)
+
+
+# (what is checked, the check, needs the developer tools): a check raises BuildError with what to do, or returns a detail
+MAC_REQUIREMENTS = [
+    ('Apple silicon', req_apple_silicon, False), ('macOS 26 or later', req_macos, False),
+    ('Xcode command line tools', req_clang, False), ('C++ standard library headers', req_cxx, True),
+    ('llvm-objdump (Xcode)', req_objdump, True), ('make, codesign, git, rsync', req_tools, True),
+    ('Homebrew opus and libvpx', req_homebrew, False), ('Python 3.14', req_python, False),
+]
+
+
+def prerequisites():
+    """The Mac's tools, checked at the start with what to do about each one missing (from the original project's)."""
+    for _, check_one, _ in MAC_REQUIREMENTS:
+        detail = check_one()
+    return detail   # req_python's: the Python for the build's venv
 
 
 def make_safe(work):
@@ -783,11 +914,12 @@ def data_bundle(work, logs):
         CFBundleShortVersionString=DISPLAY, CFBundleVersion='1')))
     run(['codesign', '--force', '--sign', '-', tmp], logs / 'sign-data.log')
     run(['codesign', '--verify', '--strict', tmp], logs / 'verify-data.log')   # here, where the 14 GB are hashed anyway
-    stamp.unlink(missing_ok=True)
-    if bundle.exists():
-        shutil.rmtree(bundle)
-    tmp.rename(bundle)
-    stamp.write_text(json.dumps(want))
+    with critical():
+        stamp.unlink(missing_ok=True)
+        if bundle.exists():
+            shutil.rmtree(bundle)
+        tmp.rename(bundle)
+        stamp.write_text(json.dumps(want))
     return bundle, True
 
 
@@ -903,9 +1035,11 @@ def step_app_macos(work, out, logs):
                     say('7/7 app: the new app is ready; waiting for the running game to close before replacing it')
                     notified = time.monotonic()
                 time.sleep(2)
-            if install_app(tmp, out):
+            with critical():
+                kept = install_app(tmp, out)
+                stamp_path.write_text(json.dumps(want))
+            if kept:
                 say('7/7 app: the game data is unchanged; kept the installed copy, so the first start need not verify it again')
-            stamp_path.write_text(json.dumps(want))
             t['built'] = True
     with timed('app: register and first check') as t:
         t['built'] = 'checked'
@@ -927,9 +1061,8 @@ IOS_EXPERIMENTAL = ('EXPERIMENTAL: shaders are not pre-translated, the picture w
                     'carries only the shader variants this Mac has already translated, and every other draw is skipped.')
 
 
-def prerequisites_ios():
-    """The Mac's tools (the Mac runtime exports the device's code), plus Xcode 26+ with the iOS SDK, xcodegen and CMake."""
-    py = prerequisites()
+def req_ios_xcode():
+    """An Xcode 26+ with the iOS SDK (also outside /Applications); returns its Developer folder and version."""
     sys.path.insert(0, str(IOS / 'tools'))
     from xcode_dir import developer_dir   # noqa: E402  an Xcode with the iOS SDK, also outside /Applications
     try:
@@ -942,13 +1075,61 @@ def prerequisites_ios():
     if int(version.split('.')[0] or 0) < 26:
         raise BuildError(f'--platform ios needs Xcode 26 or later (found {version} in {developer}); install it from the App Store')
     if subprocess.run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], capture_output=True, env=env).returncode:
-        raise BuildError(f'the Xcode in {developer} has no iOS SDK: install the iOS platform in Xcode > Settings > Components')
+        raise BuildError(f'the Xcode in {developer} has no iOS SDK: install the iOS platform in Xcode > Settings > Components',
+                         ['xcodebuild -downloadPlatform iOS'])
+    return developer, version
+
+
+def req_ios_tools():
     path = os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '')])
     missing = [tool for tool in ('xcodegen', 'cmake') if not shutil.which(tool, path=path)]
     if missing:
-        raise BuildError(f'--platform ios needs {" and ".join(missing)}: brew install {" ".join(missing)}')
-    say(f'iOS: Xcode {version} ({developer}), {", ".join(f"{t} {shutil.which(t, path=path)}" for t in ("xcodegen", "cmake"))}')
+        raise BuildError(f'--platform ios needs {" and ".join(missing)}: brew install {" ".join(missing)}',
+                         [f'brew install {" ".join(missing)}'])
+    return ', '.join(f'{t} {shutil.which(t, path=path)}' for t in ('xcodegen', 'cmake'))
+
+
+IOS_REQUIREMENTS = [('Xcode 26 with the iOS SDK', req_ios_xcode, False), ('xcodegen and CMake', req_ios_tools, False)]
+
+
+def prerequisites_ios():
+    """The Mac's tools (the Mac runtime exports the device's code), plus Xcode 26+ with the iOS SDK, xcodegen and CMake."""
+    py = prerequisites()
+    developer, version = req_ios_xcode()
+    tools = req_ios_tools()
+    say(f'iOS: Xcode {version} ({developer}), {tools}')
     return py
+
+
+def check_requirements(platform_name):
+    """--check-requirements: every requirement of the platform, also past the first one missing, with what to do."""
+    checks = MAC_REQUIREMENTS + (IOS_REQUIREMENTS if platform_name == 'ios' else [])
+    results, have_tools = [], True
+    for name, check_one, needs_tools in checks:
+        row = dict(name=name, ok=True, message='', fixes=[])
+        if needs_tools and not have_tools:
+            row.update(ok=False, message='not checked: needs the Xcode command line tools first')
+        else:
+            try:
+                detail = check_one()
+                if isinstance(detail, tuple):
+                    detail = f'Xcode {detail[1]} ({detail[0]})'
+                row['message'] = str(detail) if detail else ''
+            except BuildError as e:
+                row.update(ok=False, message=str(e), fixes=e.fixes)
+        if check_one is req_clang and not row['ok']:
+            have_tools = False
+        results.append(row)
+        emit('requirement', **row)
+    ok = all(r['ok'] for r in results)
+    emit('requirements', ok=ok, platform=platform_name)
+    if EVENTS is None:
+        for r in results:
+            print(f'{"ok     " if r["ok"] else "MISSING"}  {r["name"]}' + (f': {r["message"]}' if r['message'] else ''))
+            for fix in r['fixes']:
+                print(f'          fix: {fix}')
+        print('all requirements are met' if ok else 'some requirements are missing')
+    return ok
 
 
 def ios_seed_caches(work, extra):
@@ -987,6 +1168,12 @@ PLATFORMS = {
     'macos': dict(output_suffix='.app', requirements=prerequisites, package=step_app_macos, runtime=True),
     'ios': dict(output_suffix='.ipa', requirements=prerequisites_ios, package=step_ipa, runtime=True),
 }
+# The steps in order, for --progress json's plan (the names timed() reports); 'inputs' and 'requirements' are not timed
+STEPS = ['inputs', 'requirements', 'setup: Python environment', 'identify', 'code: ExeFS', 'code: NSO segments',
+         'code: rewrite', 'code: rewrite checks', 'fonts', 'data: RomFS', 'prepare', 'runtime', 'shader tools',
+         'launcher and icon']
+PACKAGE_STEPS = dict(macos=['app: data bundle', 'app: assemble and sign', 'app: register and first check'],
+                     ios=['ipa: device build and package'])
 
 
 def parse_args(argv):
@@ -1008,12 +1195,105 @@ def parse_args(argv):
                          'the picture is missing until shaders are translated ahead of time)')
     ap.add_argument('--ios-seed-cache', type=Path, action='append',
                     help='iOS: another Mac shader cache folder whose translated variants the IPA carries (read only); repeatable')
+    add_window_options(ap)
     return ap.parse_args(argv)
+
+
+def add_window_options(ap):
+    ap.add_argument('--gui', action='store_true', help='open a window that builds the app without the command line '
+                                                       '(compiled from games/xcx/builder on first use)')
+    ap.add_argument('--progress', choices=('text', 'json'), default='text',
+                    help='json: one JSON object a line on stdout (steps, times, error, output) and the human output on '
+                         'stderr, for the window; SIGTERM then cancels cleanly')
+    ap.add_argument('--check-requirements', action='store_true',
+                    help='check this Mac\'s requirements for --platform (all of them, with what to do) and exit')
+
+
+def parse_mode(argv):
+    """--gui and --check-requirements need no game file: read them (and --progress, --platform) before the full parser."""
+    ap = argparse.ArgumentParser(add_help=False)   # no choices here: a wrong value is the full parser's to report
+    ap.add_argument('--platform', default='macos')
+    ap.add_argument('--progress', default='text')
+    ap.add_argument('--gui', action='store_true')
+    ap.add_argument('--check-requirements', action='store_true')
+    mode = ap.parse_known_args(argv)[0]
+    if mode.check_requirements and (mode.platform not in PLATFORMS or mode.progress not in ('text', 'json')):
+        parse_args(argv)   # reports the wrong value
+    return mode
+
+
+# ---- the window (games/xcx/builder) ----
+BUILDER = GAME / 'builder'
+BUILDER_CACHE = Path.home() / 'Library/Caches/MacNativeGames/xcx-builder'
+BUILDER_NAME = 'XCX Builder'
+
+
+def builder_app():
+    """The window's app, compiled with xcrun swiftc (the command line tools are enough; no Xcode project) into the
+    per-user cache, in a folder named by the hash of its sources and the compiler, so it is compiled again only when
+    one of them changes."""
+    swiftc = subprocess.run(['xcrun', '--find', 'swiftc'], capture_output=True, text=True)
+    if swiftc.returncode:
+        raise BuildError('the window needs swiftc from the Xcode command line tools: xcode-select --install')
+    sources = sorted(BUILDER.glob('*.swift'))
+    h = hashlib.sha256(subprocess.run(['xcrun', 'swiftc', '--version'], capture_output=True, text=True).stdout.encode())
+    for path in sources + [BUILDER / 'Info.plist']:
+        h.update(path.name.encode() + b'\0' + path.read_bytes() + b'\0')
+    folder = BUILDER_CACHE / h.hexdigest()[:16]
+    app = folder / f'{BUILDER_NAME}.app'
+    if (app / 'Contents/MacOS/XCXBuilder').is_file():
+        return app
+    say(f'compiling the window ({len(sources)} Swift files, once; {BUILDER.relative_to(REPO)})')
+    tmp = folder.with_name(folder.name + '.partial')
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    binary = tmp / f'{BUILDER_NAME}.app/Contents/MacOS/XCXBuilder'
+    binary.parent.mkdir(parents=True)
+    log = tmp / 'swiftc.log'
+    run(['xcrun', 'swiftc', '-O', '-parse-as-library', '-target', 'arm64-apple-macos26.0', '-module-name', 'XCXBuilder',
+         '-o', binary, *sources], log, quiet=False)
+    shutil.copy2(BUILDER / 'Info.plist', binary.parent.parent / 'Info.plist')
+    run(['codesign', '--force', '--sign', '-', binary.parent.parent.parent], tmp / 'codesign.log', quiet=False)
+    for old in BUILDER_CACHE.iterdir():   # earlier versions of the window
+        if old.is_dir() and old != tmp:
+            shutil.rmtree(old, ignore_errors=True)
+    tmp.rename(folder)
+    return app
+
+
+def open_gui():
+    """Compile (if needed) and open the window; it runs this script with the Python that runs it now."""
+    app = builder_app()
+    # The test hook (XCX_BUILDER_TEST_*, games/xcx/builder/TestHook.swift) is passed through for verification only
+    env = [a for k, v in os.environ.items() if k.startswith('XCX_BUILDER_TEST_') for a in ('--env', f'{k}={v}')]
+    # no -n: a second --gui brings the open window forward instead of starting a second build into the same work folder
+    subprocess.run(['open', *env, app, '--args', '--script', str(Path(__file__).resolve()), '--python', sys.executable],
+                   check=True)
+    say(f'opened {BUILDER_NAME} ({app})')
 
 
 def main(argv):
     t0 = time.time()
+    mode = parse_mode(argv)
+    if mode.progress == 'json':
+        progress_json()
+    if mode.gui:
+        return open_gui()
+    if mode.check_requirements:
+        return 0 if check_requirements(mode.platform) else 1
     args = parse_args(argv)
+    emit('plan', platform=args.platform, steps=STEPS + PACKAGE_STEPS[args.platform])
+    with timed('inputs', record=False) as t:
+        t['built'] = 'checked'
+        plat, out, work, kind = check_inputs(args)
+    emit('start', platform=args.platform, game=str(args.game), out=str(out), work=str(work))
+    with timed('requirements', record=False) as t:
+        t['built'] = 'checked'
+        logs = requirements(args, plat, out, work)
+    build_all(args, plat, out, work, logs, t0)
+
+
+def check_inputs(args):
     plat = PLATFORMS[args.platform]
     for name in ('game', 'keys', 'update', 'title_keys'):
         path = getattr(args, name)
@@ -1041,10 +1321,13 @@ def main(argv):
     fonts_cached = (work / 'extracted/firmware/shared-fonts/manifest.json').is_file()
     if kind == 'nsp' and not args.firmware and not fonts_cached:
         raise BuildError('NSPs do not carry the system shared fonts: pass --firmware <folder of your firmware\'s NCA files>')
+    return plat, out, work, kind
 
+
+def requirements(args, plat, out, work):
     if args.platform == 'ios':
         say(IOS_EXPERIMENTAL)
-    py = plat['requirements']()
+    args.python = plat['requirements']()
     logs = work / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     say(f'work folder {work} ({free_gb(work):.0f} GB free on its volume)')
@@ -1057,6 +1340,11 @@ def main(argv):
             free_gb(out.parent) < EXPECTED['romfs']['size'] / GB + 1:
         raise BuildError(f'{out.parent} is on another volume than the work folder, so the app is a full copy there '
                          f'(about 15 GB); it has {free_gb(out.parent):.1f} GB free')
+    return logs
+
+
+def build_all(args, plat, out, work, logs, t0):
+    py = args.python
     env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
     with timed('setup: Python environment') as t:
         vpy, t['built'] = prepare_venv(work, py, logs)
@@ -1076,6 +1364,7 @@ def main(argv):
         total = time.time() - t0
         say_times(work, total)
         say(f'done in {total / 60:.1f} min: {out}')
+        emit('done', platform='ios', out=str(out), work=str(work), seconds=round(total, 1))
         say(IOS_EXPERIMENTAL)
         say('The IPA is unsigned: sign and install it with your own Apple ID (python3 games/xcx/ios/tools/install_device.py '
             f'"{out}" --device "<device name>" --game-data "{work / app_bundle.ROMFS / "romfs.bin"}") or with a sideloading '
@@ -1087,6 +1376,7 @@ def main(argv):
     total = time.time() - t0
     say_times(work, total)
     say(f'done in {total / 60:.1f} min: {out}')
+    emit('done', platform='macos', out=str(out), work=str(work), seconds=round(total, 1))
     say('Open it from Finder (it may be moved, also to /Applications). Saves, the shader cache and the log go to '
         '~/Library/Application Support/MacNativeGames/XCX and ~/Library/Logs/MacNativeGames/xcx.log. The first start '
         'verifies the game data once (about 10 s) and keeps a record; shaders are translated as the game meets them '
@@ -1095,9 +1385,11 @@ def main(argv):
 
 if __name__ == '__main__':
     try:
-        main(sys.argv[1:])
+        sys.exit(main(sys.argv[1:]))
     except BuildError as e:
         print(f'\nERROR: {e}', file=sys.stderr)
+        emit('error', step=CURRENT[0], message=str(e), log=str(e.log) if e.log else None, fixes=e.fixes)
         sys.exit(1)
     except KeyboardInterrupt:
+        emit('cancelled', step=CURRENT[0])
         sys.exit(130)

@@ -132,6 +132,15 @@ user's Library, so the signed bundle stays read-only:
 The app's profile is not seeded from a work folder (it has none). `--check` (run once by the build) only checks that the
 game binary is in the app and that its version matches Info.plist, so macOS's first-run scan happens during the build.
 
+**The window (`build_app.py --gui`).** `builder/` holds a small SwiftUI app (`BuilderApp.swift`, `BuildModel.swift`,
+`ContentView.swift`, `TestHook.swift`, `Info.plist`) that `build_app.py --gui` compiles with `xcrun swiftc` (no Xcode
+project) into `~/Library/Caches/MacNativeGames/xcx-builder/<hash>/XCX Builder.app`. The build is ad-hoc signed and
+compiled again only when the sources or the compiler change. The app runs `build_app.py --progress json` (one JSON event
+a line on stdout, the human log on stderr; SIGTERM cancels cleanly), and `--check-requirements --progress json` for
+its prerequisites panel. `TestHook.swift` is for scripted checks only. With `XCX_BUILDER_TEST_*` set, it fills in the
+fields, starts or cancels a build, writes its state to a file, and takes screenshots of its own window. It is inactive
+otherwise.
+
 **Development (`make app`).** After stages 1-3, from `games/xcx`, with the same `WORK` and `PY` (`GAME` and `KEYS`
 absolute, for the icon):
 

@@ -16,7 +16,7 @@ named by hash and subject. Game data, keys and saves are never committed (see `.
 | 2 | A runtime target with the Bayonetta-only parts compiled out, booting to `nnMain` | done 2026-10-23 |
 | 3 | Follow every unknown service / command / NVN call until the first `nvnQueuePresentTexture` | done 2026-10-23 (title screen; menus answer input) |
 | 4 | A picture, audio (Wwise), input, saves | in progress: controllable gameplay and battle with characters drawn; saves write; key 2 interpolates (too slow on an M1) |
-| 5 | Performance, shaders, packaging as an app | in progress: `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
+| 5 | Performance, shaders, packaging as an app | in progress: `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--gui` does the same from a native window; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
 
 ## Log
 
@@ -805,3 +805,73 @@ was not relaunched.
 - **Device install**: no device was connected.
 - Not checked on a device: memory footprint, input, audio, the RomFS check and the fill round trip.
 
+### 2026-10-23: the build window (`build_app.py --gui`)
+
+**What.** `python3 build_app.py --gui` opens a native SwiftUI window. It builds the Mac app, or the experimental IPA,
+from the player's own files without the command line.
+
+**The window** (`games/xcx/builder/`: `BuilderApp.swift`, `BuildModel.swift`, `ContentView.swift`, `TestHook.swift`,
+`Info.plist`):
+
+- File pickers for the game file (XCI or base NSP), the 1.0.1 update NSP (shown when the game file is an NSP, which is
+  told apart by its PFS0 header, not its name), prod.keys, title.keys (optional), the firmware folder (optional), the
+  output (a save panel; the default is `<game folder>/Xenoblade Chronicles X.app`, or `.ipa`), and the work folder
+  (under Advanced).
+- Mac / iPhone and iPad (experimental), with the experimental warning when iOS is picked.
+- A prerequisites panel with every check and a copyable fix for each missing one.
+- The legal notice before the first build (own the game, your own keys, never share the build). Acceptance is kept in
+  UserDefaults.
+- Build, each step with its status and time, a collapsible log, Cancel, and then Open App / Show in Finder. A failure
+  names the step and the message, and offers the step's log file.
+- The last-used paths and platform are remembered. Only paths are passed. The window never reads the key files.
+
+**Compile on first use.** `build_app.py --gui` hashes the Swift sources, `Info.plist` and `xcrun swiftc --version`,
+and compiles with `xcrun swiftc -O -parse-as-library -target arm64-apple-macos26.0` into
+`~/Library/Caches/MacNativeGames/xcx-builder/<hash>/XCX Builder.app`. It ad-hoc signs the bundle, removes older
+versions, and opens it with `--script <build_app.py> --python <the Python running it>`. Nothing is built in the source
+tree and nothing ready-made is shipped. A second `--gui` brings the open window forward.
+
+**Protocol** (`build_app.py`; without these flags the CLI is unchanged):
+
+- `--progress json`: stdout carries one JSON object a line, each with `event` and `time`. The events are `plan`
+  (platform, the step names in order), `start` (platform, game, out, work), `step` (step, status `running`, then
+  `built` / `reused` / `checked` / `failed` / `cancelled`, with seconds), `done` (platform, out, work, seconds), `error`
+  (step, message, log, fixes) and `cancelled` (step). All human output goes to stderr. `inputs` and `requirements` are
+  reported as steps but stay out of `logs/build-times.json`.
+- SIGTERM in this mode cancels. Each step's tool runs in its own process group, which gets SIGTERM, then SIGKILL after
+  10 s. Replacing an installed app or data bundle is a critical section, where a cancel waits until the section ends.
+  Exit 130.
+- `--check-requirements [--platform ios] [--progress json]` reports every requirement, also past the first missing
+  one: `requirement` events (name, ok, message, fixes), then `requirements` (ok). Exit 0 or 1. `prerequisites()` runs
+  the same checks in the same order and raises the same messages as before. `BuildError` now carries `fixes` and `log`.
+
+**Checked** (M1 MacBook Air, macOS 26.5.2):
+
+- `xcode-select -p` points at Xcode. The sources also compile with only the command line tools: `DEVELOPER_DIR=
+  /Library/Developer/CommandLineTools xcrun swiftc` with no warnings, and `builder_app()` with the same toolchain
+  produced an ad-hoc signed bundle. It takes about 5 s per compile on this Mac.
+- `--gui` compiles and opens the window. Screenshots are in `XCX_build_clean/shots/builder-*.png`. The window draws
+  them itself through the test hook, because this Mac's terminal has no screen recording permission for
+  `screencapture`.
+- A build through the window (the test hook fills in the XCI, prod.keys, `--work XCX_build_clean` and the output
+  `XCX_build_clean/gui-test/Xenoblade Chronicles X.app`). Every work step was reused. The new app folder was assembled
+  and signed in 0.6 s, and macOS's first scan of it took 120 s. Run again, everything was reused and it took about 2 s.
+  The window ended with Open App and Show in Finder (`builder-3-done.png`, `builder-4-done-log.png`). The gui-test app
+  was then deleted: it was an APFS clone, and deleting it freed only a few MB.
+- title.keys as the game: the window shows "Stopped at “inputs”" with the message, and nothing is written
+  (`builder-5-error.png`).
+- Cancel, in a scratch work folder: during a fresh `code: rewrite` (`builder-7-cancelled.png`) and at `code: rewrite
+  checks`. Then SIGTERM to `--progress json` while `equiv.py` ran with 9 worker processes: exit 130, 0 workers left,
+  the finished rewrite was reused on the next run, and all stdout lines parsed as JSON. The scratch folder was deleted.
+- The prerequisites panel with a missing requirement (iOS with `DEVELOPER_DIR` set to the command line tools):
+  `builder-10-missing.png`. The iOS warning is in `builder-8-ios.png` and the notice in `builder-9-notice.png`.
+- CLI: the normal Mac command on `XCX_build_clean` reused every step. The first rerun re-assembled the app in 0.7 s,
+  because the app stamp named the gui-test output. The second rerun was "current", 1.1 s, and the seal verifies. The
+  build's output, and the output of five error cases, are the same as the previous `build_app.py` apart from
+  timestamps and timings. The only difference is the usage line, which now lists the three new options. `py_compile`
+  passes.
+
+**Not done / open.** The file pickers and the Open App button were not clicked by hand: there was no accessibility
+permission for UI scripting, and the hook sets the fields directly. No iOS build was run through the window (Xcode
+components were being downloaded). The builder has no app icon. Building into a new output folder means macOS scans
+that app once (about 2 minutes), as from the command line.
