@@ -25,6 +25,14 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def write(path, data):
+    """Write only when the content differs, so an unchanged header keeps its time and make does not relink the runtime
+    (build_app.py runs this step on every build)."""
+    data = data.encode() if isinstance(data, str) else data
+    if not path.is_file() or path.read_bytes() != data:
+        path.write_bytes(data)
+
+
 def module_table(work, name):
     path = work / f'rewritten/{VERSION}/{name}.patched.bin'
     image = path.read_bytes()
@@ -135,9 +143,9 @@ def runtime_tables(work, out):
         lines.append('{' + f'.name={json.dumps(m["name"])},.digest={json.dumps(m["sha256"])},.file_size={m["size"]}ULL,.text_end={l["TEXT_END"]}ULL,.ro_off={l["RO_OFF"]}ULL,.data_off={l["DATA_OFF"]}ULL,.patch_off={l["PATCH_OFF"]}ULL,.key_off={l["KEY_PAGE_OFF"]}ULL,.symbols=symbol_{n},.nsym={len(m["symbols"])},.relocs=reloc_{n},.nreloc={len(m["relocs"])},.gates=gate_{n},.ngate={len(m["gates"])},.init={m["tags"].get(12,0)}ULL,.ctor_flag={m["ctor_flag"]}ULL,.init_array={m["tags"].get(25,0)}ULL,.init_size={m["tags"].get(27,0)}ULL' + '},')
     lines.append('};')
     lines.append(f'#define PROBE_PLT {plt[0]}ULL\n#define PROBE_SLOT {slot}ULL')
-    (out / 'runtime_tables.h').write_text('\n'.join(lines) + '\n')
+    write(out / 'runtime_tables.h', '\n'.join(lines) + '\n')
     (work / 'analysis').mkdir(exist_ok=True)
-    (work / 'analysis/runtime-layout.json').write_text(json.dumps(modules, indent=2) + '\n')
+    write(work / 'analysis/runtime-layout.json', json.dumps(modules, indent=2) + '\n')
     return dict(modules=len(modules), relocations=sum(len(m['relocs']) for m in modules), main_plt=hex(plt[0]))
 
 
@@ -152,17 +160,18 @@ def romfs_config(work, out):
         rows.extend(struct.pack('<QQII', item['offset'], item['size'], len(strings), len(name)))
         strings.extend(name)
     index = struct.pack('<8sQQ', b'TOTKRFS1', len(manifest['files']), 24 + len(rows)) + rows + strings
-    (folder / 'runtime-index.bin').write_bytes(index)
-    (out / 'romfs_config.h').write_text(f'#define ROMFS_IMAGE_SIZE {manifest["romfs_size"]}ULL\n'
+    write(folder / 'runtime-index.bin', index)
+    write(out / 'romfs_config.h', f'#define ROMFS_IMAGE_SIZE {manifest["romfs_size"]}ULL\n'
                                         f'#define ROMFS_IMAGE_SHA256 "{manifest["romfs_sha256"]}"\n'
                                         f'#define ROMFS_INDEX_SHA256 "{hashlib.sha256(index).hexdigest()}"\n')
     return dict(files=len(manifest['files']), index_bytes=len(index))
 
 
 def shared_fonts_config(work, out):
-    """The six system fonts, when extracted to <work>/extracted/firmware/shared-fonts (as the TotK build does).
-    The game's own partitions do not contain them (the XCI's update partition does; a copy of TotK's extraction serves);
-    without them the rows are empty and the runtime stops if the game asks for one."""
+    """The six system fonts, when extracted to <work>/extracted/firmware/shared-fonts (scripts/extract_shared_fonts.py).
+    The game's own partitions do not contain them; the XCI's system update partition does (--xci), and a firmware's NCAs
+    do (--firmware). Without them the rows are empty and the runtime stops if the game asks for one. The rows name the
+    work folder's files; a self-contained app reads the same files from inside itself (TOTK_SHARED_FONTS)."""
     folder = work / 'extracted/firmware/shared-fonts'
     if not (folder / 'manifest.json').exists():
         rows = ['{"",0ULL,0ULL,""}'] * 6
@@ -176,7 +185,7 @@ def shared_fonts_config(work, out):
             assert path.stat().st_size == f['bfttf_bytes'] == f['font_bytes'] + 8
             rows.append(f'{{"{path}",{f["bfttf_bytes"]}ULL,{f["font_bytes"]}ULL,"{f["sha256"]}"}}')
         state = 'loaded from ' + str(folder)
-    (out / 'shared_fonts_config.h').write_text('#define SHARED_FONT_COUNT 6\n#define SHARED_FONT_ROWS ' + ','.join(rows) + '\n')
+    write(out / 'shared_fonts_config.h', '#define SHARED_FONT_COUNT 6\n#define SHARED_FONT_ROWS ' + ','.join(rows) + '\n')
     return state
 
 

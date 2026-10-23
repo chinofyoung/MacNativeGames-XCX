@@ -90,11 +90,32 @@ def load_keys(path):
     return keys
 
 
-def common_tickets(f, entries):
+def load_title_keys(path):
+    """title.keys (`<rights ID> = <encrypted title key>`, 32 hex digits each) as {rights ID: key}, in memory only.
+
+    For NSPs whose tickets are missing or personalized: the keys are the same encrypted title keys a common ticket
+    holds, so nca_ctr_key decrypts them with titlekek the same way. Values are never printed."""
+    keys = {}
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        line = line.split('#', 1)[0].strip()
+        if '=' not in line:
+            continue
+        name, value = (part.strip() for part in line.split('=', 1))
+        try:
+            rights, key = bytes.fromhex(name), bytes.fromhex(value)
+        except ValueError:
+            raise ValueError(f'Invalid title key encoding at line {number}') from None
+        require(len(rights) == 16 and len(key) == 16, f'Invalid title key length at line {number}')
+        keys[rights] = key
+    return keys
+
+
+def common_tickets(f, entries, personalized='error'):
     """Keep encrypted title keys in memory only, as nxnative's NSP importer does.
 
     Ticket offsets below are relative to the signed body; accept the standard RSA/ECDSA layouts.
-    A personalized ticket cannot provide a common title key and is never treated as one.
+    A personalized ticket cannot provide a common title key and is never treated as one: it stops the read
+    (personalized='error'), or is passed over when the title key comes from elsewhere (personalized='skip': title.keys).
     """
     tickets = {}
     bodies = {0x10000: 0x240, 0x10001: 0x140, 0x10002: 0x80,
@@ -109,7 +130,9 @@ def common_tickets(f, entries):
         body = bodies[sig]
         require(size >= body + 0x180, 'Truncated NSP ticket body')
         data = read_at(f, offset + body, 0x180)
-        require(data[0x141] == 0, 'Personalized NSP tickets are unsupported; a common ticket is required')
+        if data[0x141] != 0:
+            require(personalized == 'skip', 'Personalized NSP tickets are unsupported; a common ticket (or title.keys) is required')
+            continue
         rights, key = data[0x160:0x170], data[0x40:0x50]
         require(rights not in tickets or tickets[rights] == key, 'Conflicting NSP tickets')
         tickets[rights] = key
@@ -134,7 +157,7 @@ def nca_ctr_key(hdr, keys, tickets):
     generation = max(max(hdr[0x206], hdr[0x220]) - 1, 0)
     rights = hdr[0x230:0x240]
     if rights != bytes(16):
-        require(rights in tickets, 'Missing common ticket for rights-managed NCA in the NSP')
+        require(rights in tickets, 'Missing common ticket for rights-managed NCA in the NSP (no title key for it in title.keys either)')
         keyname = f'titlekek_{generation:02x}'
         require(keyname in keys, f'Missing {keyname} in prod.keys')
         return decrypt(keys[keyname], modes.ECB(), tickets[rights])

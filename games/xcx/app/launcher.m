@@ -2,8 +2,16 @@
    The presets are Xenoblade Chronicles X's (stage 5): the game's own 30 fps, no MetalFX upscaling, no frame interpolation,
    the compact HUD: the configuration every stage-4 run was verified with. The 60 / 120 fps, fixed-900p, LOD and grain
    choices need exefs patches nobody has made for this game yet; the window names any missing one and leaves it out.
-   The app is a small bundle; the game's data stay in the work folder (XCX_build) named by Info.plist's XCXWorkFolder,
-   so nothing large is copied. Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
+   Two kinds of app (scripts/app_bundle.py):
+   - self-contained (the root build_app.py): the game folder is inside the app, Contents/Resources/xcx (the binary, the
+     rewritten code, the RomFS index and fonts; the RomFS image is the signed data bundle in Contents/Helpers that
+     extracted/v101/romfs/romfs.bin links to). The app can be moved anywhere. Everything the game writes goes to the
+     user's Library, so the signed bundle stays read-only: the shader cache to Application Support/MacNativeGames/XCX/
+     shader-cache/rt-<chain> (as Tears of the Kingdom's app), the RomFS check record to .../XCX/app-romfs-record.
+   - development (`make app`): a small bundle; the game's data stay in the work folder (XCX_build) named by
+     Info.plist's XCXWorkFolder (or XCX_WORK), so nothing large is copied.
+   The self-contained mode is used when Contents/Resources/xcx holds the game binary and XCX_WORK is not set.
+   Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
    What each setting does in the runtime:
    - Frame rate: 30 = the game's own pacing (30 / 60 by scene); 60 = the 60 fps patch; 120 = the 60 fps patch on a 120 Hz
      present base (experimental: correct only if the game advances by real time, not by frames).
@@ -14,13 +22,16 @@
      the game's picture to the output, TOTK_MFX_UPSCALE / TOTK_MFX_OUTPUT, or plain linear scaling).
    - Extras: improved LOD (off in every preset: it breaks the geometry here), no film grain (patches); the RomFS
      interface mod; the FPS / resolution HUD.
-   Patches come from <work>/patches (scripts/prepare_patches.py, make_res_patch.py); a missing one is left out and the
-   window says so.
+   Patches come from <game folder>/patches (scripts/prepare_patches.py, make_res_patch.py); a missing one is left out
+   and the window says so.
    Progress: the player's profile (account, saves, pseudo device id, pipeline list) is in Application Support
    (MacNativeGames/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
-   terminal runs use), so Continue loads the same save; the originals are never moved or changed. The shader cache stays
-   where the runtime keeps it, next to the binary (<work>/build/shader-cache/rt-*), so both share it. */
+   terminal runs use), so Continue loads the same save; the originals are never moved or changed (development apps
+   only: a self-contained app has no work folder). A development app's shader cache stays where the runtime keeps it,
+   next to the binary (<work>/build/shader-cache/rt-*), so it and make boot share it. */
 #import <Cocoa/Cocoa.h>
+#include "dmsh_chain.h"      /* DMSH_CHAIN: the shader cache's name (third_party/d2r_gfx/gfx/nvn) */
+#include "game_version.h"    /* TOTK_GAME_VERSION, TOTK_GAME_DIR (runtime/) */
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -39,16 +50,29 @@ static const int fps_values[] = {30, 60, 120};
 static const int sizes[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
 static const int outputs[] = {0, 2160, 1440, 1080, 900};
 
+/* The game folder inside a self-contained app, when it holds the game binary (else nil). */
+static NSString *bundle_root(void) {
+    NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"xcx"];
+    return [NSFileManager.defaultManager isExecutableFileAtPath:[root stringByAppendingPathComponent:@"build/xcx-native"]] ? root : nil;
+}
+/* Self-contained unless XCX_WORK names a work folder (a development run of a self-contained app's launcher). */
+static BOOL self_contained(void) { const char *e = getenv("XCX_WORK"); return !(e && *e) && bundle_root() != nil; }
+/* The game folder: the work folder (XCX_WORK, else Info.plist's XCXWorkFolder) or the one inside the app. */
 static NSString *work_folder(void) {
     const char *e = getenv("XCX_WORK");
-    return e && *e ? @(e) : [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXWorkFolder"];
+    if (e && *e) return @(e);
+    return bundle_root() ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXWorkFolder"];
 }
+static NSString *data_folder(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/XCX"]; }
 static BOOL have_patch(NSString *slug) {
     return [NSFileManager.defaultManager fileExistsAtPath:[work_folder() stringByAppendingFormat:@"/patches/%@.tsv", slug]];
 }
 static NSString *fixed900_patch(void) { return have_patch(@"res-1600x900") ? @"res-1600x900" : have_patch(@"force-scaling-900p-v3") ? @"force-scaling-900p-v3" : nil; }
-/* RomFS mods: <work>/../mods/<name>/romfs with a manifest.tsv (make mods). */
-static NSString *mods_folder(void) { return [[work_folder() stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"mods"]; }
+/* RomFS mods: <work>/../mods/<name>/romfs with a manifest.tsv (make mods); a self-contained app: <data>/mods. */
+static NSString *mods_folder(void) {
+    return self_contained() ? [data_folder() stringByAppendingPathComponent:@"mods"]
+                            : [[work_folder() stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"mods"];
+}
 static NSArray<NSString *> *romfs_mods(void) {
     NSMutableArray *out = [NSMutableArray array];
     for (NSString *name in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:mods_folder() error:nil] sortedArrayUsingSelector:@selector(compare:)])
@@ -196,7 +220,9 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
                           [missing componentsJoinedByString:@", "]];
     self.play.enabled = YES;
     if (!work_folder() || ![NSFileManager.defaultManager isExecutableFileAtPath:[work_folder() stringByAppendingPathComponent:@"build/xcx-native"]]) {
-        [s appendFormat:T("No encuentro el juego en %@.", "The game is not in %@."), work_folder() ?: @"?"]; self.play.enabled = NO;
+        if (work_folder()) [s appendFormat:T("No encuentro el juego en %@.", "The game is not in %@."), work_folder()];
+        else [s appendString:T("Esta app no contiene el juego: vuelve a crearla con build_app.py.", "This app does not hold the game: build it again with build_app.py.")];
+        self.play.enabled = NO;
     }
     self.note.stringValue = s; self.note.hidden = !s.length;
 }
@@ -239,18 +265,36 @@ static void seed_profile(NSString *work, NSString *profile) {
 }
 
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
     @autoreleasepool {
+        /* --check (build_app.py, once after packaging): only look that the game is in the app and of the version
+           Info.plist declares, then exit. macOS scans a new app the first time it runs (long for a 14 GB bundle, with
+           nothing on screen); doing it during the build makes the player's first start immediate. */
+        if (argc > 1 && !strcmp(argv[1], "--check")) {
+            NSString *declared = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+            int ok = bundle_root() != nil && [declared isEqualToString:@TOTK_GAME_VERSION];
+            printf("%s: game version %s\n", ok ? "ok" : "missing game binary or version mismatch", TOTK_GAME_VERSION);
+            return ok ? 0 : 1;
+        }
         [NSApplication sharedApplication]; NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
         Launcher *l = [Launcher new]; NSApp.delegate = l;
         [NSApp run];
         if (!l.launch) return 0;
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
         NSString *work = work_folder(), *home = NSHomeDirectory();
-        NSString *data = [home stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/XCX"];
+        BOOL bundled = self_contained();
+        NSString *data = data_folder();
         NSString *logs = [home stringByAppendingPathComponent:@"Library/Logs/MacNativeGames"];
         NSString *profile = [data stringByAppendingPathComponent:@"profile"], *slot = [data stringByAppendingPathComponent:@"game-slot"];
-        if (!make_dir(profile) || !make_dir(slot) || !make_dir(logs)) { fail([NSString stringWithFormat:@"%@", data]); return 1; }
+        /* A self-contained app keeps what the game writes out of its signed bundle (Tears of the Kingdom's app does the
+           same): the shader cache in the user's Library, and its own RomFS check record (the record names the image's
+           file identity, and the app's image is another file than a work folder's, so the two kinds of app do not
+           replace each other's record and verify 14 GB again in turn). TOTK_SHADER_CACHE from the environment wins. */
+        const char *cache_env = getenv("TOTK_SHADER_CACHE");
+        NSString *cache = cache_env && *cache_env ? @(cache_env) : [data stringByAppendingFormat:@"/shader-cache/rt-%s", DMSH_CHAIN];
+        NSString *record = bundled ? [data stringByAppendingPathComponent:@"app-romfs-record"] : data;
+        if (!make_dir(profile) || !make_dir(slot) || !make_dir(logs) || !make_dir(record) || (bundled && !make_dir(cache))) {
+            fail([NSString stringWithFormat:@"%@", data]); return 1;
+        }
         if (chdir(work.fileSystemRepresentation)) { fail(work); return 1; }   // the runtime reads extracted/ and rewritten/ relative to it
 
         int fps = (int)[d integerForKey:@"fps"]; NSMutableArray *patches = [NSMutableArray array];
@@ -283,13 +327,17 @@ int main(int argc, char **argv) {
 
         setenv("TOTK_PROFILE_DIR", profile.fileSystemRepresentation, 1);
         setenv("TOTK_GAME_SLOT_DIR", slot.fileSystemRepresentation, 1);
-        setenv("TOTK_ROMFS_PROOF_DIR", data.fileSystemRepresentation, 1);
+        setenv("TOTK_ROMFS_PROOF_DIR", record.fileSystemRepresentation, 1);
+        if (bundled) {
+            setenv("TOTK_SHADER_CACHE", cache.fileSystemRepresentation, 1);
+            setenv("TOTK_SHARED_FONTS", "extracted/firmware/shared-fonts", 1);   // the fonts inside the app (runtime/shared_font.c)
+        }
         NSString *preferred = NSLocale.preferredLanguages.firstObject; if (preferred) setenv("TOTK_LOCALE", preferred.UTF8String, 1);
         setenv("TOTK_GPU_ALLOW_SUBMIT", "1", 1); setenv("TOTK_GPU_WIDEN", "1", 1); setenv("TOTK_GPU_BLOCKRT", "1", 1);
         setenv("TOTK_GPU_MIDCLEAR", "1", 1);
         unsetenv("TOTK_GPU_BUDGET_MB");   // XCX: the runtime's default budget (40% of memory), as in every stage-4 run (Bayonetta 3's app sets 5000)
         setenv("DM_PRESENT_LINK_FALLBACK", "1", 1);   // keep presenting when macOS pauses the display link for a window it thinks covered
-        setenv("TOTK_SLOT_OWNER", "user", 1); setenv("TOTK_SLOT_PURPOSE", "player", 1);
+        setenv("TOTK_SLOT_OWNER", "user", 0); setenv("TOTK_SLOT_PURPOSE", "player", 0);   // a scripted check may name itself (open --env)
         unsetenv("TOTK_HEADLESS");
         { NSString *cmds = [data stringByAppendingPathComponent:@"input.txt"]; FILE *cf = fopen(cmds.fileSystemRepresentation, "w"); if (cf) fclose(cf);
           setenv("TOTK_INPUT_FILE", cmds.fileSystemRepresentation, 1); }   // echo "shot ~/Desktop/shot.png" >> it
@@ -297,7 +345,12 @@ int main(int argc, char **argv) {
         NSString *log = [logs stringByAppendingPathComponent:@"xcx.log"], *prev = [logs stringByAppendingPathComponent:@"xcx.previous.log"];
         [NSFileManager.defaultManager removeItemAtPath:prev error:nil]; [NSFileManager.defaultManager moveItemAtPath:log toPath:prev error:nil];
         FILE *lf = fopen(log.fileSystemRepresentation, "w"); if (lf) { dup2(fileno(lf), STDOUT_FILENO); dup2(fileno(lf), STDERR_FILENO); fclose(lf); }
-        seed_profile(work, profile);   // after the log is open, so the copy is recorded in it
+        if (!bundled) seed_profile(work, profile);   // after the log is open, so the copy is recorded in it
+        { NSString *image = [work stringByAppendingPathComponent:@"extracted/" TOTK_GAME_DIR "/romfs/romfs.bin"];
+          fprintf(stderr, "[launcher] %s: game folder %s, RomFS image %s, shader cache %s\n",
+                  bundled ? "self-contained app (game data inside the app)" : "development app (game data in the work folder)",
+                  work.UTF8String, image.stringByResolvingSymlinksInPath.UTF8String,
+                  bundled ? cache.UTF8String : "next to the game binary (build/shader-cache)"); }
         fprintf(stderr, "[launcher] work %s, patches %s, present %s Hz, display %s, fullscreen %s, window %s, drawable scale %s, MetalFX %s, mod %s\n",
                 work.UTF8String, getenv("XCX_PATCHES"), getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
                 getenv("TOTK_DRAWABLE_SCALE") ?: "1", getenv("TOTK_MFX_OUTPUT") ? "on" : "off", getenv("TOTK_ROMFS_MODS"));

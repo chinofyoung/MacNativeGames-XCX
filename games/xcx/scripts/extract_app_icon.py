@@ -6,7 +6,7 @@ import argparse
 import subprocess
 import tempfile
 from pathlib import Path
-from extract_exefs import read_at, require, container_entries, common_tickets, nca_inventory
+from extract_exefs import read_at, require, container_entries, common_tickets, nca_inventory, load_title_keys
 from extract_romfs import index_romfs
 from extract_shared_fonts import Slice, load_keys, nca_romfs
 
@@ -14,10 +14,10 @@ LANGUAGES = ['AmericanEnglish', 'BritishEnglish', 'Japanese', 'French', 'German'
              'Italian', 'Dutch', 'CanadianFrench', 'Portuguese', 'Russian', 'Korean', 'TraditionalChinese', 'SimplifiedChinese']
 
 
-def control_nca(game, keys, title):
+def control_nca(game, keys, title, title_keys=None):
     with game.open('rb') as f:
         _, entries = container_entries(f, game.stat().st_size)
-        tickets = common_tickets(f, entries)
+        tickets = {**(title_keys or {}), **common_tickets(f, entries, 'skip' if title_keys else 'error')}
         records = nca_inventory(f, entries, keys)
         controls = [r for r, _ in records if r['content_type'] == 2 and r['title_id'].lower() == title.lower()]
         require(controls, 'Expected a control NCA for this title in the game file')
@@ -36,13 +36,14 @@ def main():
     ap.add_argument('game', type=Path)
     ap.add_argument('--keys', type=Path, required=True)
     ap.add_argument('--title', default='0100f2c0115b6000')
+    ap.add_argument('--title-keys', type=Path, help='title.keys, for an NSP without a common ticket')
     ap.add_argument('--output', type=Path, default=Path('build/AppIcon.icns'))
     a = ap.parse_args()
     keys = load_keys(a.keys)
     with tempfile.TemporaryDirectory() as t:
         t = Path(t)
         image = t / 'control.romfs'
-        offset, tickets = control_nca(a.game, keys, a.title)
+        offset, tickets = control_nca(a.game, keys, a.title, load_title_keys(a.title_keys) if a.title_keys else None)
         nca_romfs(Slice(a.game, offset), keys, image, tickets)
         entries = {e['path']: e for e in index_romfs(image)}
         icon = next((entries[f'icon_{lang}.dat'] for lang in LANGUAGES if f'icon_{lang}.dat' in entries), None)

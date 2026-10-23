@@ -2,7 +2,9 @@
 """Merge the base Program NCA and its BKTR update (both inside one XCI) into one RomFS image; verify all six IVFC levels; index it.
 
 Xenoblade Chronicles X: Definitive Edition ships as one XCI holding the complete base (v0) and the 1.0.1 update
-(0100453019AA8800 v65536) with its common ticket. Both Program NCAs carry the base title ID, so each is found through its
+(0100453019AA8800 v65536) with its common ticket. The base can also come from a base NSP or a base-only XCI and the
+update from its own NSP (`--update`); NCAs of an NSP are decrypted with the NSP's common ticket, or with `--title-keys`
+(title.keys) when it has none. Both Program NCAs carry the base title ID, so each is found through its
 own content meta (CNMT) instead: the Application meta names the base Program, the Patch meta the update Program.
 Unlike Bayonetta 3's, the base section is complete (not sparse, not compressed). The layers are, from the bottom up:
   base:   NCA body -> AES-CTR (the section's own upper IV)
@@ -21,8 +23,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import modes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # extract_exefs / extract_romfs: this folder's copies of games/totk/scripts
-from extract_exefs import (decrypt, read_at, require, load_keys, container_entries, common_tickets, nca_ctr_key,
-                           read_nca_header, partition_entries)
+from extract_exefs import (decrypt, read_at, require, load_keys, load_title_keys, container_entries, common_tickets,
+                           nca_ctr_key, read_nca_header, partition_entries)
 from extract_romfs import index_romfs
 
 BASE_TITLE = '0100453019AA8000'
@@ -95,14 +97,16 @@ def parse_cnmt(data):
     return dict(title_id=f'{tid:016X}', version=version, type=kind, program=programs[0])
 
 
-def open_program(path, keys, which):
-    """The base ('base') or update ('update') Program NCA of the XCI: (file, record, header, Ctr, meta).
+def open_program(path, keys, which, title_keys=None):
+    """The base ('base') or update ('update') Program NCA of an XCI or NSP: (file, record, header, Ctr, meta).
 
-    Both Program NCAs carry the base title ID; the Application meta (base) and the Patch meta 1.0.1 (update) name them."""
+    Both Program NCAs carry the base title ID; the Application meta (base) and the Patch meta 1.0.1 (update) name them.
+    title_keys ({rights ID: encrypted title key}, load_title_keys) fills in for missing or personalized tickets; a
+    common ticket in the file wins."""
     require(which in ('base', 'update'), 'which: base or update')
     f = path.open('rb')
     kind, entries = container_entries(f, path.stat().st_size)
-    tickets = common_tickets(f, entries)
+    tickets = {**(title_keys or {}), **common_tickets(f, entries, 'skip' if title_keys else 'error')}
     ncas = {}
     for name, offset, length in entries:
         if name.lower().endswith('.nca'):
@@ -285,10 +289,11 @@ def verify_ivfc(fs, size, read, image_path):
     return counts, levels[-1][1], digest.hexdigest()
 
 
-def open_merged(game, keys):
-    """(file, base record, update record, update FS header, Patched) for the XCI; the caller closes the file."""
-    f, brec, bhdr, bctr, bmeta = open_program(game, keys, 'base')
-    _, urec, uhdr, uctr, umeta = open_program(game, keys, 'update')   # a second handle on the same file
+def open_merged(game, keys, update=None, title_keys=None):
+    """(files, base record, update record, update FS header, Patched): the base from `game`, the update from `update`
+    (an NSP) or, without it, from `game` too (the XCI holding both); the caller closes the files."""
+    f, brec, bhdr, bctr, bmeta = open_program(game, keys, 'base', title_keys)
+    _, urec, uhdr, uctr, umeta = open_program(update or game, keys, 'update', title_keys)   # a second handle
     base = PlainBase(bctr, *romfs_section(bhdr))
     ustart, uend, ufs = romfs_section(uhdr)
     return (f, uctr.f), dict(brec, meta=bmeta), dict(urec, meta=umeta), ufs, Patched(uctr, ustart, uend, ufs, base)
@@ -296,12 +301,15 @@ def open_merged(game, keys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('game', type=Path, help='the XCI (base v0 + update 1.0.1)')
+    parser.add_argument('game', type=Path, help='the XCI (base v0 + update 1.0.1), or the base game (XCI or NSP) with --update')
     parser.add_argument('--keys', required=True, type=Path)
+    parser.add_argument('--update', type=Path, help='the 1.0.1 update NSP (default: the update inside the game file)')
+    parser.add_argument('--title-keys', type=Path, help='title.keys, for NSPs without a common ticket')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     require(not args.output.exists(), 'Output already exists; choose a new directory')
-    handles, brec, urec, ufs, patched = open_merged(args.game, load_keys(args.keys))
+    title_keys = load_title_keys(args.title_keys) if args.title_keys else None
+    handles, brec, urec, ufs, patched = open_merged(args.game, load_keys(args.keys), args.update, title_keys)
     try:
         args.output.mkdir(parents=True)
         image = args.output / 'romfs.bin'
@@ -309,7 +317,8 @@ def main():
         files = index_romfs(image)
         stat = args.game.stat()
         report = dict(status='pass', source=str(args.game.resolve()), source_size=stat.st_size, source_mtime_ns=stat.st_mtime_ns,
-                      base=brec, update=urec, ivfc_blocks=counts, romfs_size=size, romfs_sha256=sha,
+                      update_source=str(args.update.resolve()) if args.update else None,
+                      romfs_mtime_ns=image.stat().st_mtime_ns, base=brec, update=urec, ivfc_blocks=counts, romfs_size=size, romfs_sha256=sha,
                       bytes_from_base=patched.from_base, bytes_from_update=patched.from_update,
                       files=files, integrity='FS headers, content metas and all six IVFC levels of the merged image verified; RSA signatures not checked')
         (args.output / 'index.json').write_text(json.dumps(report, indent=2) + '\n')

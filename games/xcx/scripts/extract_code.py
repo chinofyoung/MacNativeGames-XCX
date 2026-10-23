@@ -3,14 +3,15 @@
 
 The XCI holds the complete base (v0) and the 1.0.1 update; both Program NCAs carry the base title ID, so the program is
 chosen through the content metas: by default the one the Patch meta 1.0.1 names (the port target), with `--program base`
-the one the Application meta names. FS header, ExeFS hash table and every ExeFS block are verified. Keys stay in memory.
+the one the Application meta names. With `--update <NSP>` the update program comes from that NSP instead (a base NSP or
+a base-only XCI as the game file). FS header, ExeFS hash table and every ExeFS block are verified. Keys stay in memory.
 No executable launch, no network.
 """
 import argparse
 import hashlib
 import json
 from pathlib import Path
-from merge_romfs import open_program, read_pfs, require, load_keys, sections   # also puts this folder on sys.path
+from merge_romfs import open_program, read_pfs, require, load_keys, load_title_keys, sections   # also puts this folder on sys.path
 
 
 def main():
@@ -19,10 +20,14 @@ def main():
     parser.add_argument('--keys', required=True, type=Path)
     parser.add_argument('--program', choices=('update', 'base'), default='update',
                         help='update (1.0.1, default) or base (v0) Program NCA')
+    parser.add_argument('--update', type=Path, help='the 1.0.1 update NSP (default: the update inside the game file)')
+    parser.add_argument('--title-keys', type=Path, help='title.keys, for NSPs without a common ticket')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     require(not args.output.exists(), 'Output already exists; choose a new directory')
-    f, record, hdr, ctr, meta = open_program(args.game, load_keys(args.keys), args.program)
+    source = args.update if args.update and args.program == 'update' else args.game
+    title_keys = load_title_keys(args.title_keys) if args.title_keys else None
+    f, record, hdr, ctr, meta = open_program(source, load_keys(args.keys), args.program, title_keys)
     with f:
         for i, start, end, fs in sections(hdr):
             if fs[2:4] != b'\x01\x02':
@@ -34,8 +39,8 @@ def main():
             for name, data in files:
                 (args.output / name).write_bytes(data)
                 extracted.append({'name': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-            stat = args.game.stat()
-            manifest = {'source': str(args.game.resolve()), 'source_size': stat.st_size, 'source_mtime_ns': stat.st_mtime_ns,
+            stat = source.stat()
+            manifest = {'source': str(source.resolve()), 'source_size': stat.st_size, 'source_mtime_ns': stat.st_mtime_ns,
                         'container': record['container'], 'program': record, 'meta': meta, 'section_index': i,
                         'integrity': 'FS header, ExeFS hash table, and every ExeFS data block verified; RSA signatures not checked',
                         'files': extracted}

@@ -8,8 +8,9 @@ The log's Status table and its newest entries say what is being worked on and wh
 
 - Never commit game content: no game program or code, RomFS files, art, text, audio, movies, translated shaders or
   libraries, keys or saves. Screenshots show game imagery and stay local (`docs/screenshots/` is ignored by git).
-- Keep game files, keys and work folders where git ignores them (`personal/` and `XCX_build/` at the repository root, or
-  `XCX_build/` and `mods/` in `games/xcx`). Check `git status` before every commit.
+- Keep game files, keys, work folders and built apps where git ignores them (`personal/`, `XCX_build/` and
+  `XCX_build_*/` at the repository root, or `XCX_build/` and `mods/` in `games/xcx`). A built app holds the game. Check
+  `git status` before every commit.
 - The repository is MIT. Write your own code. Do not copy GPL code or code from other mods; reading them for ideas is
   fine. Third-party code you bring in keeps its license, and its source and license go into
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -43,8 +44,11 @@ The log's Status table and its newest entries say what is being worked on and wh
 ## Repository layout
 
 - The port is `games/xcx`, with its own copy of the runtime, graphics layer, rewriter and scripts (forked from the
-  original MacNativeGames repository, which keeps the other games). The only other code is `vendor/ryujinx`, the
-  Ryujinx shader translator sources the shader translator is built from.
+  original MacNativeGames repository, which keeps the other games). The only other code is the root `build_app.py`
+  (the players' one-command build, which runs `games/xcx`'s scripts and Makefile targets and packages a self-contained
+  app) and `vendor/ryujinx`, the Ryujinx shader translator sources the shader translator is built from.
+- `games/xcx/Makefile` is the developer path and `build_app.py` reuses it: a build step belongs in a script or a
+  Makefile target that both use, not in one of them only. What the app bundle holds is `games/xcx/scripts/app_bundle.py`.
 - The shader translator ships ready-made in `games/xcx/prebuilt/macos-arm64` (checked against its SHA-256 by
   `make shader-tools`). Its sources are `games/xcx/tools/totk_xlate` and `vendor/ryujinx`; rebuild it with
   `games/xcx/tools/totk_xlate/publish_native.sh` (needs the .NET 10 SDK) only when you change them.
@@ -77,7 +81,8 @@ The log's Status table and its newest entries say what is being worked on and wh
   keys, defaults or verified hashes (`expected-v1.0.1.json`, `game_version.h`) unless that is the point of the pull
   request.
 - **Build what you touched.** `make runtime` builds with `-Werror`; build the app (`make app`) when you change the
-  runtime, the graphics layer or the launcher. If you change the shader translator or its patches, commit the rebuilt
+  runtime, the graphics layer or the launcher, and run `python3 build_app.py` (a second run takes seconds) when you
+  change a build script, the Makefile, `app_bundle.py` or the launcher's self-contained mode. If you change the shader translator or its patches, commit the rebuilt
   `totk_xlate` and its `totk_xlate.sha256` together and say how you checked that it translates as before. If you could
   not build something, say so.
 - **Say how you tested:** built only, or played on a Mac. Name the Mac, and where in the game you were. A build that

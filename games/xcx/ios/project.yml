@@ -1,0 +1,97 @@
+# The iPhone / iPad app (xcodegen spec), restored from the original project's games/totk/ios/project.yml and adapted for
+# Xenoblade Chronicles X. EXPERIMENTAL (see games/xcx/README.md, "iPhone and iPad").
+# Not used directly: ios/tools/build_ipa.py fills in the ${XCX_...} variables (xcodegen expands environment variables)
+# and generates the Xcode project in the work folder (<work>/build/ios), so nothing is written into this source tree.
+#   XCX_SRC     games/xcx (the runtime, graphics layer and this folder)
+#   XCX_GEN     <work>/build/ios/Gen: generated tables, the embedded game code (embed.S, ios_embed.h), device libraries
+#   XCX_APP_NAME, XCX_BUNDLE_ID, XCX_DEPLOYMENT, XCX_SDK (iphoneos), XCX_VERSION, XCX_BUILD, XCX_CPU_FLAGS
+# The sources mirror the Mac Makefile: every runtime/*.c, *.m, *.S except the Mac front end (frontend.m; frontend_ios.m
+# takes its place), loader.c once more with main renamed (the app's main.m starts it on a game thread), and the graphics
+# layer (third_party/d2r_gfx/gfx/nvn, tex) with -DGAME_XCX, as the Makefile's GFX_FLAGS.
+name: XCXIOS
+options:
+  bundleIdPrefix: org.macnativegames
+  deploymentTarget:
+    iOS: "${XCX_DEPLOYMENT}"
+configFiles:
+  Release: ${XCX_GEN}/xcx.xcconfig
+  Debug: ${XCX_GEN}/xcx.xcconfig
+targets:
+  XCX:
+    type: application
+    platform: iOS
+    sources:
+      - path: ${XCX_SRC}/ios/Sources
+        excludes:
+          - Info.plist
+          - XCX.entitlements
+      - path: ${XCX_SRC}/ios/Settings.bundle   # the Settings app pane (game language picker); applied in main.m
+      - path: ${XCX_SRC}/runtime
+        excludes:
+          - frontend.m
+          - loader.c
+      - path: ${XCX_SRC}/third_party/d2r_gfx/gfx/nvn
+        compilerFlags: "-DGAME_XCX"
+        excludes:
+          - "*.txt"
+          - "*.inc"
+      - path: ${XCX_SRC}/third_party/d2r_gfx/gfx/tex
+        compilerFlags: "-DGAME_XCX"
+        excludes:   # as the Makefile: only *.c and *.m (nvn_bctc.metal is the MSL gen_bctc_msl.py embeds; built at run time)
+          - "*.metal"
+          - "*.md"
+          - "*.py"
+      - path: ${XCX_GEN}/embed.S
+      - path: ${XCX_SRC}/runtime/loader.c
+        compilerFlags: "-Dmain=totk_host_main"
+    info:
+      path: ${XCX_GEN}/Info.plist
+      properties:
+        CFBundleDisplayName: ${XCX_APP_NAME}
+        CFBundleName: ${XCX_APP_NAME}
+        CFBundleIdentifier: ${XCX_BUNDLE_ID}
+        CFBundleShortVersionString: "${XCX_VERSION}"
+        CFBundleVersion: "${XCX_BUILD}"
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UIApplicationSupportsIndirectInputEvents: true
+        GCSupportsControllerUserInteraction: true
+        GCSupportedGameControllers:
+          - ProfileName: ExtendedGamepad
+        CADisableMinimumFrameDurationOnPhone: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: XCXSceneDelegate
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: ${XCX_BUNDLE_ID}
+      PRODUCT_NAME: XCX
+      CODE_SIGN_ENTITLEMENTS: ${XCX_SRC}/ios/Sources/XCX.entitlements
+      TARGETED_DEVICE_FAMILY: "1,2"
+      IPHONEOS_DEPLOYMENT_TARGET: "${XCX_DEPLOYMENT}"
+      SDKROOT: ${XCX_SDK}
+      ARCHS: arm64
+      ONLY_ACTIVE_ARCH: NO
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGNING_ALLOWED: NO
+      ENABLE_BITCODE: NO
+      GCC_C_LANGUAGE_STANDARD: gnu11
+      CLANG_ENABLE_OBJC_ARC: YES
+      GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+      HEADER_SEARCH_PATHS:
+        - $(inherited)
+        - "\"${XCX_SRC}/runtime\""
+        - "\"${XCX_SRC}/third_party/d2r_gfx/gfx/nvn\""
+        - "\"${XCX_SRC}/third_party/d2r_gfx/gfx/nvn/include\""
+        - "\"${XCX_GEN}\""
+        - "\"${XCX_GEN}/deps/include\""
+      OTHER_CFLAGS: $(inherited) ${XCX_CPU_FLAGS}

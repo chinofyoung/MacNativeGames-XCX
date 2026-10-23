@@ -16,7 +16,7 @@ named by hash and subject. Game data, keys and saves are never committed (see `.
 | 2 | A runtime target with the Bayonetta-only parts compiled out, booting to `nnMain` | done 2026-10-23 |
 | 3 | Follow every unknown service / command / NVN call until the first `nvnQueuePresentTexture` | done 2026-10-23 (title screen; menus answer input) |
 | 4 | A picture, audio (Wwise), input, saves | in progress: controllable gameplay and battle with characters drawn; saves write; key 2 interpolates (too slow on an M1) |
-| 5 | Performance, shaders, packaging as an app | in progress: `make app` builds a double-clickable app that continues the save with the shader cache reused; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
+| 5 | Performance, shaders, packaging as an app | in progress: `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23) |
 
 ## Log
 
@@ -636,3 +636,172 @@ Checked with `XCX_build/tools/app5.sh` (150 s limit, log `XCX_build/logs/stage5/
 Application Support was not seeded again, the RomFS record was reused (no re-hash), the shader cache was reused (0 new
 shaders), the save loaded into Primordia, no failure lines, and the profile's ten files are byte-identical after the
 run. The run also logged real keyboard input from the user.
+
+### 2026-10-23: one-command build (`build_app.py`, macOS)
+
+Goal: the player's own XCI (or a base NSP with the 1.0.1 update NSP) becomes a self-contained Mac app with one command,
+following the original project's root `build_app.py` (TotK / BotW): the game recognised by the IDs inside the files,
+every step checked against `assets/expected-v1.0.1.json`, keys never printed, a reusable work folder, APFS clones into
+the app, ad-hoc signing. The `--platform` option is there (`macos`; `ios` is reserved and refused).
+
+**What was added or changed.**
+
+- `build_app.py` (repository root): requirements check (Apple silicon, macOS 26, clang / clang++ headers,
+  `llvm-objdump`, make / git / codesign, Homebrew `opus` / `libvpx` static libraries, Python 3.14), the work folder's
+  venv (`requirements.txt` + `unicorn==2.1.4`, reinstalled only when the list changes), then seven checked steps:
+  ExeFS (pinned SHA-256; `main.npdm` also by Nintendo's ACID signature, as upstream), NSO segments
+  (`prepare_modules.py`), rewrite (pinned SHA-256), rewrite checks (`structck.py` and `equiv.py`, recorded in
+  `analysis/rewrite-checks.json` with the image and checker digests), shared fonts, merged RomFS (SHA-256, size, 53
+  files, bytes from base / update), `make prepare`, `make runtime`, `make shader-tools` (translator SHA-256, SPIRV-Cross
+  HEAD = pinned commit), `make launcher icon`, then the app. Each step is timed (`logs/build-times.json`).
+- `scripts/identify_game.py`: one JSON line per file (NCA title IDs and content types, content metas with versions,
+  ticket rights IDs and kind). `build_app.py` refuses another title (named when known: TotK, BotW, Bayonetta 3, the
+  other Xenoblades), the update given as the game, a base-only file without `--update`, another base or update
+  version, and an NSP whose rights-managed NCAs have neither a common ticket nor a `--title-keys` entry, all before any
+  long step.
+- NSPs: `extract_code.py` and `merge_romfs.py` take `--update <update.nsp>` and `--title-keys`;
+  `extract_exefs.load_title_keys` reads title.keys into memory, and `common_tickets(..., personalized='skip')` passes a
+  personalized ticket over when title keys are given. Upstream takes title keys from common tickets only (its hactool
+  hook `MNG_TITLE_KEYS` is the other way); here a title.keys entry fills in, a common ticket in the file wins.
+- Shared fonts: from the XCI's system update partition (`extract_shared_fonts.py --xci`, which existed but was not
+  used) or `--firmware`. `expected-v1.0.1.json` now pins `shared_fonts_sha256`, each name with the known versions: this
+  card's system update, the firmware in `personal/fw` the port was first run with, and upstream's TotK reference; another
+  valid, NCA-verified font is bound by its own bytes, as upstream does. The README's "copy them from a TotK build" step
+  is gone.
+- `scripts/app_bundle.py`: the app's name, identifier, Info.plist and the list of files a self-contained app carries,
+  shared by `make app` (which now writes its bundle with `app_bundle.py dev`) and `build_app.py`.
+- `scripts/prepare_runtime.py` writes its headers and the RomFS index only when their content changes, so `make
+  prepare` on an unchanged work folder does not relink the runtime.
+- Makefile: `launcher` and `icon` targets; the launcher includes `dmsh_chain.h` and `game_version.h`;
+  `TITLE_KEYS=` for the icon of an NSP. Changing the Makefile makes `make` rebuild the graphics objects once.
+- `app/launcher.m`: a self-contained mode, used when `Contents/Resources/xcx/build/xcx-native` exists and `XCX_WORK`
+  is not set. It runs the game from there, sets `TOTK_SHADER_CACHE` to `~/Library/Application Support/MacNativeGames/
+  XCX/shader-cache/rt-<chain>` (upstream's place), `TOTK_SHARED_FONTS` to the fonts in the app and the RomFS record to
+  `.../XCX/app-romfs-record` (the record names the image's file identity; with the shared one the development and the
+  self-contained app would make each other hash 14 GB in turn), does not seed the profile, and logs which kind of app ran
+  and where its RomFS image is. `--check` (run once by the build so macOS's first-run scan happens then). The
+  XCXWorkFolder mode is unchanged, except that `TOTK_SLOT_OWNER` / `TOTK_SLOT_PURPOSE` from the environment are kept, so
+  a scripted check can run as an agent's session that a game the user starts takes over.
+
+**App layout.** `Contents/Resources/xcx/{build/xcx-native, build/spirv-cross/spirv-cross,
+build/shader-service/totk_xlate, rewritten/v101/*.patched.bin, extracted/v101/romfs/runtime-index.bin,
+extracted/firmware/shared-fonts/}`, and `extracted/v101/romfs/romfs.bin` a relative link to
+`Contents/Helpers/GameData-v101.bundle/Contents/Resources/romfs.bin`. The data bundle is signed once in the work folder
+(`build/data-bundles`, stamped by size, mtime and SHA-256) and cloned in, so the app's own signature does not hash 14 GB
+again; an installed app with the same data keeps its bundle (inode, so the RomFS record stays valid), and the `.app`
+folder is kept while its contents are replaced (upstream's `keep_game_data` / `install_app`). No startup shader seed
+exists for this game, so there is no Metal cache warm-up step.
+
+**Checked** (M1 MacBook Air, macOS 26.5.2; disk 52 GB free before):
+
+- Clean build `python3 build_app.py "personal/<XCI>" -k personal/prod.keys --work XCX_build_clean -o
+  "XCX_build_clean/Xenoblade Chronicles X.app"`: exit 0 in 433 s. Steps: venv 6.0 s, identify 0.5, ExeFS 0.2, NSO 1.6,
+  rewrite 72.7, rewrite checks 72.6 (structck OK, equiv 0 divergent sites, for all three modules), fonts 0.2, RomFS 35.9,
+  prepare 0.6, runtime 15.0, shader tools 18.4, launcher and icon 1.2, data bundle 82.4 (signing 14 GB), assemble and
+  sign 0.6, register and first check 124.7 (macOS's first scan of the new app). `codesign --verify --strict` passes. The
+  three copies of the image (work folder, data bundle, app) share their physical blocks (`F_LOG2PHYS_EXT` at 0, 5 and
+  13 GiB): `du` shows 41 GB, the folder takes about 13.8 GiB.
+- Second run: 1.7 s, every step reused (the app "current: same files, valid signature").
+- The app, opened with `open --env XCX_PLAY=1 --env TOTK_SLOT_OWNER=claude` and scripted input (J at 55 s after the
+  first frame, capture at 110 s, close at 115 s; `XCX_build_clean/logs/app-checks/b1.log`): the launcher logged the
+  self-contained mode with the RomFS image inside the bundle's data bundle; the RomFS was hashed once (first frame
+  9.7 s); the save storage is the profile in Application Support; Continue loaded the save into Primordia
+  (`XCX_build_clean/shots/b1_110s_field.png`); the shader cache is the one in Application Support (new: 17 translation
+  lines); 0 `【红】`, 0 FATAL; graceful close.
+- Moved to a folder outside the work folder (`mv`, same volume) and opened again (`b2_moved.log`): game folder and RomFS
+  image in the moved bundle, `RomFS unchanged; reused full SHA256 verification record`, first frame 0.49 s, 0 shaders
+  translated, Continue into Primordia (`b2_moved_110s_field.png`); the only work-folder path in the log is the capture's.
+  Moved back; the seal still verifies.
+- Save files and account in the profile: SHA-256 identical before and after all runs. The development app's RomFS
+  record (`.romfs-verified-v1`, 13:15) was not touched by the self-contained app.
+- The separate-update path: an update NSP written from the XCI's own update NCAs (with and without its ticket) and a
+  scratch title.keys made from that ticket. `extract_code.py` gives the pinned ExeFS hashes with the ticket and with
+  title.keys, and stops without either; a full `build_app.py <XCI> --update <NSP without ticket> --title-keys ...` into a
+  scratch work folder passed every check (446 s) and was deleted. A real base NSP was not tried (14 GB more disk).
+  The player's own title.keys has no entry for this game.
+- Refusals, each with nothing written: title.keys as the game ("not an XCI or NSP game file"), the update NSP as the
+  game, an NSP without `--update`, an update NSP without ticket or title key, `--update` = the XCI, a non-`.app`
+  output, `--platform ios`.
+- Developer path: `make prepare runtime app WORK=../../XCX_build_clean ...` with `APP=` a scratch path: nothing
+  rebuilt, the development app's Info.plist names the work folder, its seal verifies; opened (`b3_dev.log`) it ran in
+  the development mode from the work folder and continued into Primordia, 0 failure lines. The user played during this
+  run (two `[input] user input (keyboard)` lines); the saves stayed identical. The dev app's RomFS record was saved before
+  and put back after it.
+- `XCX_build/` was not touched (no file newer than the start of this work).
+
+**Not done / open.** No startup shader seed or Metal warm-up for this game; a new install translates shaders as they
+appear. The game did not ask for the shared fonts in these runs (nor in the earlier ones), so the in-app font path
+(`TOTK_SHARED_FONTS`) is checked only by its files' SHA-256 matching the binary's table. A real base NSP is untested. No
+iOS build: `--platform ios` needs a device runtime and packaging (`runtime/frontend_ios.m` is here, upstream's
+`ios/tools/build_ipa.py` is not).
+
+### 2026-10-23: experimental iPhone / iPad IPA (`build_app.py --platform ios`)
+
+**What.** `--platform ios` now builds an unsigned IPA for sideloading. By default it writes `<game file folder>/Xenoblade
+Chronicles X.ipa`. The user asked for it knowing it is experimental: an iPhone cannot translate shaders at run time, and
+this port has no up-front translation, so most of the picture is missing. The build prints that warning at its start and
+at its end.
+
+**Restored from the original project** (`git show upstream/main:games/totk/ios/...`) into `games/xcx/ios/`:
+
+- `Sources/main.m`: classes renamed `XCX*`. It sets the Mac launcher's runtime switches: handheld mode, the shared
+  fonts, the seed, the shader cache in Documents, the profile and the RomFS record in Documents, `TOTK_ROMFS_PATCHES=0`,
+  and no `XCX_PATCHES`. The game image is in Documents/GameData. This runtime has no `TOTK_ROMFS_DATA`, so the app copies
+  its RomFS index next to the image and points `TOTK_ROMFS` there, and the Mac runtime is unchanged. A `romfs.bin`
+  dropped at the top of Documents (Finder file sharing) is moved into GameData once it has the build's size. A partly
+  copied image is reported on screen. The runtime has no `runtime_audio_output_restart`, so a weak stand-in only logs.
+- `Sources/touch_pad.{h,m}`: unchanged apart from the class name.
+- `Sources/XCX.entitlements`: the increased memory limit.
+- `Sources/Info.plist`: the template that xcodegen fills.
+- `Settings.bundle`: the language picker, cut to the languages this game is believed to have.
+- `project.yml`: paths come from `${XCX_*}` variables, so the project and DerivedData go to `<work>/build/ios`, not
+  into the source tree. The sources follow the Makefile's list, with `-DGAME_XCX` on the graphics layer.
+  `tex/nvn_bctc.metal` and the docs are left out.
+- `tools/build_deps.py`: falls back to Unix Makefiles when Ninja is missing, keeps a reuse stamp, and has a Simulator
+  mode (libvpx `generic-gnu`).
+- `tools/build_ipa.py`: rewritten around the work folder. It exports, embeds, builds the deps and the seed, generates
+  the project, then runs `xcodebuild -target XCX -sdk iphoneos`, because `-destination` needs the iOS platform
+  component downloaded. The icon is added as CFBundleIcons PNGs, because actool wanted a Simulator runtime matching
+  SDK 26.5. The IPA has no game image.
+- `tools/compile_seed.py`: an empty seed compiles nothing. Without the Metal toolchain the seed keeps its MSL, which
+  the device compiles on first use (`nvn_mtl.m shader_load`).
+- `tools/fill_shaders.py`: has no shared list. It translates into `<work>/build/ios-fill`, and the next IPA carries
+  those translations.
+- `tools/install_device.py`: XCX names, `org.macnativegames.xcx.<team>`, and `--game-data` for the 14.3 GB image.
+- `tools/shader_contrib_watch.py`: a stub, because there is no shared list or issue form.
+- `tools/gen_embed.py` and `tools/xcode_dir.py`: unchanged.
+
+Bundle id `org.macnativegames.xcx`, the same as the Mac app (another platform, so the two do not clash).
+`install_device.py` signs as `.<team>`. Display name "Xenoblade Chronicles X", executable `XCX`.
+
+**Shader seed (the optional extra).** It is done. The build reads the variants already translated in the player's
+Library cache, the work folder's `build/shader-cache` and `build/ios-fill`, and any `--ios-seed-cache` folders. It
+copies them out in the startup-seed format (`totk_shader_seed.h`: `<variant>_b.metal/_b.json`, per-shader `.variants`,
+`seed-manifest.json` with the chain). It leaves out MSL with doubles or unsupported GLSL.std.450 calls. The caches are
+only read: their file counts were the same before and after (5455 and 8383).
+
+**Verified.** `python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k personal/prod.keys --work
+XCX_build_clean --platform ios -o XCX_build_clean/xcx.ipa --ios-seed-cache XCX_build/build/shader-cache` finished in
+37 s, with steps 1-6 reused and the IPA step 36 s; the first run took a few minutes more for the deps. The IPA (39 MiB):
+
+- `unzip -t` OK, and the archive holds `Payload/XCX.app`.
+- Info.plist: `org.macnativegames.xcx`, "Xenoblade Chronicles X", 1.0.1 (65537), `iphoneos`, MinimumOSVersion 26.0,
+  file sharing on.
+- `XCX` is a Mach-O arm64 executable with LC_BUILD_VERSION platform 2 (iOS), minos 26.0, sdk 26.5. Its segments are
+  `__TOTKX` 36.9 MB, `__TOTKmainW` 51 MB, `__TOTKsdkW` 6.4 MB and `__TOTKsubsdk0W` 3.4 MB.
+- Ad-hoc signed with `increased-memory-limit`.
+- GameData holds the RomFS index, six fonts and a seed of 1456 variants (4209 files, no metallibs: no Metal
+  toolchain on this Mac).
+
+The Mac app rebuilt again with `--work XCX_build_clean`. Every step was reused, the app was re-assembled and signed,
+`--check` passed, and `codesign --verify --strict` was OK. The Mac runtime and launcher are unchanged, so the game
+was not relaunched.
+
+**Not done.**
+
+- The **Simulator**: the graphics layer is Metal 4, and the iPhoneSimulator 26.5 SDK has no
+  `MTLGPUFamilyMetal4` and no `newMTL4CommandQueue` (a test compile failed on them). MetalFX is absent there too
+  (`totk_mfx.m` does not compile). It would need a Metal 3 back end.
+- **Device install**: no device was connected.
+- Not checked on a device: memory footprint, input, audio, the RomFS check and the fill round trip.
+

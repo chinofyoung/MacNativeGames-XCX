@@ -10,8 +10,17 @@ __pycache__/
 *.xcz
 *.bfttf
 *.sav
-# build output (the app is built into the work folder)
+# build output (the app and the IPA are built into the work folder or next to the game file)
 *.app/
+*.ipa
+# iOS build outputs (games/xcx/ios/tools/build_ipa.py writes them under <work>/build; these cover an in-tree run)
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+games/xcx/ios/Gen/
+games/xcx/ios/build/
+games/xcx/ios/project.generated.yml
 # the shader translator's .NET build folders (games/xcx/tools/totk_xlate/publish_native.sh builds in a temporary folder;
 # these appear only when the project is built in place)
 games/xcx/tools/totk_xlate/obj/
@@ -20,5 +29,6 @@ games/xcx/tools/totk_xlate/bin/
 # nsw/ is the old name of personal/ (it held the work folder too)
 personal/
 /XCX_build/
+/XCX_build_*/
 nsw/
 docs/screenshots/

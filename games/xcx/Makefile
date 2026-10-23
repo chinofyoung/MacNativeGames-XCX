@@ -3,12 +3,15 @@
 # this folder's own copies, forked from the original project's games/by3 (the translator's source: tools/totk_xlate and
 # the repository's vendor/ryujinx). The runtime is retargeted to Xenoblade Chronicles X 1.0.1 (title 0100453019AA8000).
 # Everything generated goes to the work folder.
+# This is the developer path; players build with the repository's root build_app.py, which runs these same targets
+# (prepare, runtime, shader-tools, launcher, icon) with WORK=<its work folder> and then makes a self-contained app.
 # Inputs come from scripts/extract_code.py, scripts/merge_romfs.py and the rewrite (see README.md), then:
 #   make prepare   # scripts/prepare_runtime.py: tables, RomFS index, fonts config
 #   make runtime   # XCX_build/build/xcx-native
 #   make boot      # run it from the work folder (cwd: extracted/ and rewritten/ are read relative to it);
 #                  # TOTK_GPU_ALLOW_SUBMIT=1 for a picture, TOTK_HEADLESS=1 to stop where the game first needs a window
-#   make app       # <work>/Xenoblade Chronicles X.app: double-click it (the launcher sets the picture's switches itself)
+#   make app       # <work>/Xenoblade Chronicles X.app: double-click it (the launcher sets the picture's switches itself);
+#                  # a development app that runs the game from the work folder
 
 WORK ?= XCX_build
 OUT := $(WORK)/build
@@ -85,34 +88,25 @@ mods:
 # control data (GAME=<the XCI> KEYS=<prod.keys>), or the app goes without one. The app is built into the work folder,
 # never into this source tree. Saves: ~/Library/Application Support/MacNativeGames/XCX/profile, copied from
 # <work>/user-data on the first start (app/launcher.m); shader cache: <work>/build/shader-cache, shared with make boot.
+# Info.plist and the bundle layout are scripts/app_bundle.py's, shared with the self-contained app of build_app.py.
 APP_NAME := Xenoblade Chronicles X.app
 APP ?= $(WORK)/$(APP_NAME)
 GAME ?=
 KEYS ?=
-$(OUT)/launcher: app/launcher.m Makefile
-	xcrun clang -std=gnu11 -O2 -Wall -Wextra -Werror -fobjc-arc app/launcher.m -framework Cocoa -o "$@"
+TITLE_KEYS ?=
+.PHONY: launcher icon
+launcher: $(OUT)/launcher
+icon: $(OUT)/AppIcon.icns
+# dmsh_chain.h: the shader cache's name, which a self-contained app keeps in the user's Library; game_version.h: the
+# version the launcher's --check compares with Info.plist
+$(OUT)/launcher: app/launcher.m third_party/d2r_gfx/gfx/nvn/dmsh_chain.h runtime/game_version.h Makefile
+	@mkdir -p "$(dir $@)"
+	xcrun clang -std=gnu11 -O2 -Wall -Wextra -Werror -fobjc-arc -Ithird_party/d2r_gfx/gfx/nvn -Iruntime app/launcher.m -framework Cocoa -o "$@"
 $(OUT)/AppIcon.icns:
-	@if [ -n "$(GAME)" ] && [ -n "$(KEYS)" ]; then cd scripts && "$(PY)" extract_app_icon.py "$(GAME)" --keys "$(KEYS)" --title 0100453019aa8000 --output "$(abspath $@)"; \
+	@if [ -n "$(GAME)" ] && [ -n "$(KEYS)" ]; then cd scripts && "$(PY)" extract_app_icon.py "$(GAME)" --keys "$(KEYS)" --title 0100453019aa8000 $(if $(TITLE_KEYS),--title-keys "$(TITLE_KEYS)") --output "$(abspath $@)"; \
 	 else echo "no GAME= / KEYS=: the app gets no icon"; fi
 app: runtime shader-tools $(OUT)/launcher $(OUT)/AppIcon.icns
-	rm -rf "$(APP)" && mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
-	cp "$(OUT)/launcher" "$(APP)/Contents/MacOS/Xenoblade Chronicles X"
-	[ -f "$(OUT)/AppIcon.icns" ] && cp "$(OUT)/AppIcon.icns" "$(APP)/Contents/Resources/" || true
-	printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
-	  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-	  '<plist version="1.0"><dict>' \
-	  '<key>CFBundleExecutable</key><string>Xenoblade Chronicles X</string>' \
-	  '<key>CFBundleIdentifier</key><string>org.macnativegames.xcx</string>' \
-	  '<key>CFBundleName</key><string>Xenoblade Chronicles X</string>' \
-	  '<key>CFBundlePackageType</key><string>APPL</string>' \
-	  '<key>CFBundleShortVersionString</key><string>1.0.1</string>' \
-	  '<key>CFBundleVersion</key><string>1</string>' \
-	  '<key>CFBundleIconFile</key><string>AppIcon</string>' \
-	  '<key>LSMinimumSystemVersion</key><string>26.0</string>' \
-	  '<key>LSApplicationCategoryType</key><string>public.app-category.role-playing-games</string>' \
-	  '<key>NSHighResolutionCapable</key><true/>' \
-	  '<key>XCXWorkFolder</key><string>$(abspath $(WORK))</string>' \
-	  '</dict></plist>' > "$(APP)/Contents/Info.plist"
+	"$(PY)" scripts/app_bundle.py dev --app "$(APP)" --launcher "$(OUT)/launcher" --work "$(WORK)" --icon "$(OUT)/AppIcon.icns"
 	codesign --force --sign - "$(APP)"
 	@echo "built $(APP) (game data stay in $(abspath $(WORK)))"
 

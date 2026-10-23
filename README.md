@@ -46,7 +46,8 @@ Early. The game reaches the title screen, character creation and gameplay in Pri
 - The field and battle HUD and menu text are drawn.
 - Saves write, and Continue loads them.
 - A controller (a DualSense was used) and the Mac keyboard both work.
-- `make app` builds a double-clickable app with a settings window.
+- `python3 build_app.py` turns your XCI into a self-contained, double-clickable app with a settings window, in one
+  command (`make app` builds a development app for work on the port).
 
 Only those areas have been checked so far. Tested on a MacBook Air with M1 (8-core GPU, 16 GB), where the game runs at
 its own 30 fps and uses about 17 ms of GPU time per frame.
@@ -66,88 +67,60 @@ The full work log, with what was found, what was changed and how each step was c
 ## Requirements
 
 - A Mac with Apple silicon and **macOS 26** or later.
-- Xcode (for `clang`, `llvm-objdump` and the Metal frameworks).
-- [Homebrew](https://brew.sh) with `opus` and `libvpx`: `brew install opus libvpx`.
-- `git`: the build fetches SPIRV-Cross at a pinned commit.
-- Python 3 with the packages in [`games/xcx/requirements.txt`](games/xcx/requirements.txt), plus `unicorn` for the
-  rewrite check `equiv.py`. Unicorn is only used to check the rewritten code; it is not part of the port.
-- One **XCI** that holds both the base game `0100453019AA8000` (v0) and update 1.0.1 `0100453019AA8800` (v65536) with its
-  common ticket. Other versions and other packages have not been tried. `title.keys` is not needed.
+- Xcode (for `clang`, `llvm-objdump` and the Metal frameworks), or at least the Xcode command line tools plus Xcode's
+  `llvm-objdump`.
+- [Homebrew](https://brew.sh) with `opus`, `libvpx` and Python 3.14: `brew install opus libvpx python@3.14`.
+- `git` (part of the command line tools): the build fetches SPIRV-Cross at a pinned commit. The first build also needs
+  network access for the build's Python packages ([`games/xcx/requirements.txt`](games/xcx/requirements.txt), plus
+  `unicorn` for the rewrite check `equiv.py`; Unicorn only checks the rewritten code and is not part of the port).
+- Your game, base `0100453019AA8000` (v0) and update 1.0.1 `0100453019AA8800` (v65536), as either
+  - one **XCI** holding both, as the game card does (this is what the port was tested with), or
+  - a base **NSP** (or a base-only XCI) and the 1.0.1 update NSP. NSPs are decrypted with their common ticket; for an
+    NSP without one, pass your `title.keys` (`--title-keys`).
 - Your `prod.keys`.
-- The six Switch system fonts (`shared-fonts`, the same in every firmware). The game's own files do not carry them.
-  The port was tested with the fonts a Tears of the Kingdom build of the original project extracted; a separate font
-  step for this game does not exist yet.
-- Free disk space for the work folder: the merged game data alone is 14.3 GB.
+- The six Switch system fonts (`shared-fonts`). The game's own partitions do not carry them, but the XCI's system update
+  does, and the build takes them from there. For NSPs, pass your firmware's NCA files with `--firmware <folder>`.
+- About 16 GB free for the work folder (the merged game data alone is 14.3 GB). On the same volume the app costs no
+  extra space: its game data are APFS clones of the work folder's.
 
 ## Build and run
 
-There is no one-command build yet. For now the port is built with the steps below, all run from `games/xcx`.
+The examples keep the XCI and `prod.keys` in `personal/` at the repository root, where git ignores them. Any other
+place works; keep game files, work folders and apps out of the repository's tracked files (`XCX_build/` and any
+`XCX_build_*/` at the root are ignored too).
 
-The examples keep the XCI and `prod.keys` in `personal/` and the work folder in `XCX_build/`, both at the repository
-root, where git ignores them. Any other place works; keep the work folder out of the repository's tracked files.
+### One command
 
-### 1. Set up
-
-```sh
-cd games/xcx
-python3 -m venv ../../XCX_build/venv
-../../XCX_build/venv/bin/pip install -r requirements.txt unicorn
-PY=../../XCX_build/venv/bin/python
-WORK=../../XCX_build
-XCI="../../personal/Xenoblade Chronicles X Definitive Edition.xci"
-KEYS=../../personal/prod.keys
-```
-
-### 2. Extract and rewrite the code, extract the data
+From the repository root:
 
 ```sh
-$PY scripts/extract_code.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/exefs
-$PY scripts/merge_romfs.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/romfs
-for m in sdk subsdk0 main; do
-  DM_RULESET=native DM_PRIVATE_GATES=0 $PY third_party/d2r/patch_nso.py $WORK/extracted/v101/exefs/$m $WORK/rewritten/v101 $m
-done
-$PY scripts/prepare_modules.py $WORK/extracted/v101/exefs --output $WORK/extracted/v101/elf
+python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k personal/prod.keys
 ```
 
-Every block of the code and of the merged RomFS is verified against the game's own hashes as it is read.
+This makes the work folder `personal/XCX_build` and the app `personal/Xenoblade Chronicles X.app`; `--work <folder>`
+and `-o <path>.app` choose other places.
 
-The rewrite can be checked with the tools the port was verified with:
+For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.nsp> --firmware <firmware folder>`
+(add `--title-keys title.keys` for NSPs without a common ticket).
 
-```sh
-export LLVM_BIN="$(dirname "$(xcrun -f llvm-objdump)")" DM_VCACHE=$WORK/cache/verify_v101
-for m in sdk subsdk0 main; do
-  $PY third_party/d2r/structck.py $WORK/rewritten/v101 $m $WORK/extracted/v101/exefs/$m
-  $PY third_party/d2r/equiv.py $WORK/rewritten/v101 $m $WORK/extracted/v101/exefs/$m --seed 1 --jobs 8
-done
-```
-
-### 3. Add the system fonts
-
-Put the six `.bfttf` fonts in `$WORK/extracted/firmware/shared-fonts`. From a Tears of the Kingdom work folder of the
-original project, for example:
-
-```sh
-mkdir -p $WORK/extracted/firmware
-cp -R <TotK work folder>/totk/extracted/firmware/shared-fonts $WORK/extracted/firmware/
-```
-
-### 4. Build the runtime and the app
-
-```sh
-make prepare WORK=$WORK PY=$PY   # tables, RomFS index, fonts; every input checked against assets/expected-v1.0.1.json
-make app WORK=$WORK PY=$PY GAME="$PWD/$XCI" KEYS="$PWD/$KEYS"
-make install WORK=$WORK          # optional: copy the app to /Applications or ~/Applications
-```
-
-`make app` also builds the runtime (`make runtime`) and the shader tools (`make shader-tools`). `GAME` and `KEYS` must be
-absolute paths; they are used only for the app's icon, taken from the game's own data (without them the app has no
-icon). The app is written to `$WORK/Xenoblade Chronicles X.app` and is about 3 MB.
+- `python3 build_app.py --help` lists every option.
+- The build checks the Mac first (macOS version, Apple silicon, the developer tools, Homebrew's `opus` and `libvpx`,
+  Python 3.14), then recognises the game by the title IDs and versions inside the files, never by their names: another
+  game, the update given as the game, a base-only XCI without `--update`, or another version stops it with a message.
+- Every step is checked against [`games/xcx/assets/expected-v1.0.1.json`](games/xcx/assets/expected-v1.0.1.json), so a
+  damaged dump stops at the first wrong file: the 1.0.1 code (every ExeFS block verified), the rewrite for Apple silicon
+  and its two checks (structure, and semantics in an emulator), the system fonts, the merged RomFS (all six IVFC levels),
+  the shader translator's SHA-256 and SPIRV-Cross's pinned commit. Key values are never printed.
+- Each step is timed. A second run reuses what is already done and correct and takes seconds.
+- The app is **self-contained**: the code, fonts and game data are inside it (the 14.3 GB RomFS as APFS clones, so no
+  extra space on the same volume), it is ad-hoc signed, and it can be moved, also to `/Applications`. The work folder
+  can be deleted afterwards; keep it to rebuild in seconds.
 
 The shader translator comes ready-made (`games/xcx/prebuilt/macos-arm64/totk_xlate`, checked against its SHA-256), so
 the build needs no .NET. Its sources are in `games/xcx/tools/totk_xlate` and `vendor/ryujinx`; see
 [`games/xcx/prebuilt/macos-arm64/README.md`](games/xcx/prebuilt/macos-arm64/README.md) for how to rebuild it.
 
-### 5. Play
+### Play
 
 Double-click `Xenoblade Chronicles X.app` in Finder, or `open` it. A settings window comes first; **Play** starts the
 game.
@@ -156,12 +129,96 @@ game.
   game's own 30 fps without MetalFX upscaling.
 - The window also lists 60 / 120 fps and a fixed 900p resolution. Their code patches do not exist for this game yet,
   and the window says so.
-- The app does not contain the game. It runs `build/xcx-native` from the work folder named when it was built, so the
-  work folder must stay where it is.
 - The first start checks the whole RomFS once (the first frame takes about 10 s); later starts reuse that record.
+- Shaders are translated the first time the game meets them and kept in the shader cache, so the first minutes of a new
+  install stutter more than later ones.
 
-The game can also be run from a terminal in the work folder: `make boot WORK=$WORK` from `games/xcx`, which writes its
-log to `$WORK/logs/boot.log`. See [`games/xcx/README.md`](games/xcx/README.md) for the switches a terminal run needs.
+### Developer build (make)
+
+`build_app.py` runs the targets of [`games/xcx/Makefile`](games/xcx/Makefile) (`prepare`, `runtime`, `shader-tools`,
+`launcher`, `icon`). For work on the port they can be run by hand, from `games/xcx`, after the extraction steps. A work
+folder made by `build_app.py` already holds everything up to `make prepare`.
+
+```sh
+cd games/xcx
+python3.14 -m venv ../../XCX_build/venv
+../../XCX_build/venv/bin/pip install -r requirements.txt unicorn
+PY=../../XCX_build/venv/bin/python
+WORK=../../XCX_build
+XCI="../../personal/Xenoblade Chronicles X Definitive Edition.xci"
+KEYS=../../personal/prod.keys
+$PY scripts/extract_code.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/exefs
+$PY scripts/merge_romfs.py "$XCI" --keys $KEYS --output $WORK/extracted/v101/romfs
+for m in sdk subsdk0 main; do
+  DM_RULESET=native DM_PRIVATE_GATES=0 $PY third_party/d2r/patch_nso.py $WORK/extracted/v101/exefs/$m $WORK/rewritten/v101 $m
+done
+$PY scripts/prepare_modules.py $WORK/extracted/v101/exefs --output $WORK/extracted/v101/elf
+$PY scripts/extract_shared_fonts.py --keys $KEYS --xci "$XCI" --output $WORK/extracted/firmware/shared-fonts
+make prepare WORK=$WORK PY=$PY   # tables, RomFS index, fonts; every input checked against assets/expected-v1.0.1.json
+make app WORK=$WORK PY=$PY GAME="$PWD/$XCI" KEYS="$PWD/$KEYS"
+```
+
+The extraction scripts take `--update <update.nsp>` (and `--title-keys`) for a base NSP; `extract_shared_fonts.py`
+takes `--firmware <folder>` instead of `--xci`. The rewrite checks are in [`games/xcx/README.md`](games/xcx/README.md).
+
+`make app` builds a **development app** (about 3 MB) at `$WORK/Xenoblade Chronicles X.app`: it does not contain the
+game but runs `build/xcx-native` from the work folder its Info.plist names, so the work folder must stay where it is.
+`GAME` and `KEYS` must be absolute paths; they are used only for the app's icon. `make install WORK=$WORK` copies it to
+`/Applications` or `~/Applications`. The game can also be run from a terminal in the work folder: `make boot WORK=$WORK`
+from `games/xcx`, which writes its log to `$WORK/logs/boot.log`. See [`games/xcx/README.md`](games/xcx/README.md) for
+the switches a terminal run needs.
+
+### iPhone and iPad (experimental)
+
+`--platform ios` builds an unsigned IPA for sideloading. **It is experimental, and most of the picture is missing.** An
+iPhone or iPad cannot translate the game's shaders while it plays (there is no translator process on iOS), and this port
+does not translate them ahead of time yet. The IPA carries only the shader variants your Mac has already translated
+while you played the Mac app. Every other draw is skipped. The iOS app was built and its IPA checked, but it has not been
+run on a device. The iOS Simulator cannot run it: the graphics layer uses Metal 4, which the Simulator SDK does not have.
+
+Requirements:
+
+- Everything the Mac build needs (above), plus Xcode 26 or later with the iOS SDK, and `brew install xcodegen cmake`.
+  The first build downloads and compiles Opus and libvpx for iOS, so it needs network access.
+- iOS / iPadOS 26 on an iPhone 14 or newer (A15 or later), or an iPad on iPadOS 26 with an A15 chip or later. These
+  are the original project's requirements and have not been tested with this game.
+- Optional: Xcode's Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). With it the build compiles the
+  carried shaders for the device. Without it they stay Metal source, and the device compiles each one the first time it
+  is used.
+
+Build (steps 1-6 are the Mac build's and reuse the same work folder):
+
+```sh
+python3 build_app.py "<game folder>/Xenoblade Chronicles X Definitive Edition.xci" -k <prod.keys> --platform ios
+```
+
+This writes `Xenoblade Chronicles X.ipa` next to the game file (`-o` picks another `.ipa` path). The IPA is about
+40 MB, because it holds the game code, the RomFS index, the system fonts and the carried shaders, but not the 14.3 GB
+game image. `--ios-seed-cache <folder>` adds another Mac shader cache to carry. By default the build carries the
+cache in `~/Library/Application Support/MacNativeGames/XCX/shader-cache` and the work folder's own caches.
+
+Install it with your own Apple ID or a sideloading tool:
+
+- With Xcode and a cable: add your Apple ID in Xcode › Settings › Accounts (a free Personal Team works), connect and
+  trust the device, then run
+  `python3 games/xcx/ios/tools/install_device.py "Xenoblade Chronicles X.ipa" --device "<device name>" --game-data <work folder>/extracted/v101/romfs/romfs.bin`.
+  It signs the app as `org.macnativegames.xcx.<team>`, installs it, and copies the game image once into the app's
+  Documents/GameData in 1 GiB parts. Later installs skip the copy while the device holds the same image. A free Apple ID
+  signs for 7 days and a paid membership for a year. Run the command again to renew; your saves are kept. On first use,
+  trust your Apple ID under Settings › General › VPN & Device Management.
+- With another sideloading tool: install the IPA and keep its entitlement (`increased-memory-limit`). Then get the game
+  data onto the device: in Finder, select the device, open Files, and drag
+  `<work folder>/extracted/v101/romfs/romfs.bin` onto Xenoblade Chronicles X. The app moves it into its GameData folder
+  on the next start. If the game starts before the copy is complete, it says so and waits for the next start.
+
+The game data stays in the app's Documents when you reinstall or update the app. It is excluded from iCloud backups. The
+first start hashes it once against the build's checksum and keeps a record. Saves and the shader cache are also in
+Documents. The log is `log.txt` there, which you can read in the Files app (On My iPhone › Xenoblade Chronicles X).
+
+Shaders the device misses are listed in `shader-list-contribution.txt` and saved as requests in Documents. With the
+device connected, `python3 games/xcx/ios/tools/fill_shaders.py --work <work folder> --device <id>` translates them on
+the Mac and sends them to the device, and later IPA builds carry them too. Like the rest of the iOS path, this tool has
+not been run against a device.
 
 ## Controls
 
@@ -187,11 +244,13 @@ Extra keys:
 
 ## Where things are
 
-- Saves, account and pseudo device id: `~/Library/Application Support/MacNativeGames/XCX/profile`. On its first start the
-  app copies them from `$WORK/user-data` (the profile of terminal runs) if that exists, so it continues from the same
-  save. The originals are not changed, and after that the two are separate.
-- RomFS check record and the input file for diagnostic commands: `~/Library/Application Support/MacNativeGames/XCX/`.
-- Shader cache: `$WORK/build/shader-cache/`, shared by the app and terminal runs.
+- Saves, account and pseudo device id: `~/Library/Application Support/MacNativeGames/XCX/profile`, for both kinds of
+  app. On its first start a development app copies them from `$WORK/user-data` (the profile of terminal runs) if that
+  exists, so it continues from the same save. The originals are not changed, and after that the two are separate.
+- Shader cache: the app's in `~/Library/Application Support/MacNativeGames/XCX/shader-cache/`, so the signed app stays
+  read-only; a development app's in `$WORK/build/shader-cache/`, shared with terminal runs.
+- RomFS check record and the input file for diagnostic commands: `~/Library/Application Support/MacNativeGames/XCX/`
+  (the app's record in its `app-romfs-record/` folder).
 - Log: `~/Library/Logs/MacNativeGames/xcx.log` (the run before: `xcx.previous.log`). Terminal runs with `make boot`:
   `$WORK/logs/boot.log`.
 
@@ -209,7 +268,12 @@ Extra keys:
 - No online features: the network is offline. The name filter accepts any name.
 - About a hundred NVN functions the game imports are not implemented. One that is called stops the game with its name in
   the log; none was reached up to the first battle.
-- The app is not self-contained: it needs the work folder on the same Mac. There is no one-command build yet.
+- There is no startup shader seed or Metal cache warm-up yet (the original project ships both for Tears of the Kingdom):
+  a new install translates each shader the first time it is drawn.
+- The NSP path (a base NSP with an update NSP) has been checked with an update NSP only; the port was played from the
+  XCI.
+- The iPhone / iPad build (`--platform ios`) is experimental and untested on a device. Most of its picture is missing until
+  shaders are translated ahead of time; see [iPhone and iPad](#iphone-and-ipad-experimental).
 
 ## How it works
 
