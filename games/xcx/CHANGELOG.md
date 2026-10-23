@@ -1162,3 +1162,113 @@ Logs: `XCX_build/logs/ios/run-mem1/` (timeline.txt, log.txt), `XCX_build/logs/io
 Still open: the high CPU load and the "serious" thermal state (30 fps with long frames); Metal allocations of about
 2.25 GB with 300,000 texture re-uploads in 16 minutes (`贴图重传累计`); no reaction to memory warnings yet. None
 came, so the texture-copy eviction (`pkg_evict_sweep`, below 600 MB available) never ran.
+
+### 2026-10-23: 60 fps patch (experimental, off by default)
+
+**Where the cap is.** Not in the present path. The game never calls `nvnWindowSetPresentInterval` (its window keeps
+interval 1 from the builder; the log line "game sets its present interval" never appears), and with `DM_PRESENT_HZ=120`
+it still ran at 33.2 ms a frame (run r2). The game paces itself (static analysis with capstone over the original main,
+`XCX_build/analysis/fps/tools`; runtime confirmation below):
+
+- At start-up it calls SetVsyncCount(2) (2.0.0 main+0x13a2fd8, called once, from main+0x13db540 `mov w0, #2`; 1.0.1:
+  +0x13b2d18 from +0x13eb280; all 1.0.1 sites are 0xfd40 further on). N lives at main+0x1d943a0.
+- Every frame ends in a frame limiter (main+0x13a9a50, reached from the frame end main+0x13d9870 through a virtual call):
+  a pure spin on the system tick until `display period (1/60 s) x N x 0.997` has passed since the frame began.
+  2 x 16.67 x 0.997 = 33.23 ms, the measured frame time p50 of every 30 fps run. The spin keeps the main thread busy for
+  about half of each frame (one reason for the iPhone's CPU load).
+- The frame time the game simulates with, GetFrameTime() (main+0x13a250c, 13 callers), is `period x N` (N = 0: x 2), a
+  constant: the game assumes every frame lasts N/60 s.
+
+**Is the logic tied to frames?** To the nominal frame time, not to the frame count or the real time:
+
+- With only N = 1 (an experimental one-word patch, run r6) the field ran at 44 fps and the player walked 6.4 m/s against
+  8.8 m/s at 30 fps (8.8 x 44 / 60 = 6.45): the game simulated 1/60 s a frame and ran at 0.73x. Walking speed comes from
+  the camera position of each frame (new diagnostic `XCX_CAMLOG=1`, below), in steady 1 s windows while W is held.
+- GetVsyncCount() (main+0x13a25a4) has 4 callers. main+0x251e0 builds a step of 1/(60/N) but clamps the game's own
+  measured frame time (sys+0x226c, main+0x13d6108) to one or two steps. main+0x138a40 and main+0x927e10 use a fixed
+  step of 1/(60/N) a frame (and a 30/fps ratio): these run at their nominal rate, so slower than normal while the game
+  is below 60 fps with the patch. Which systems they are was not found.
+- 77 sites build the float 1/30 (0x3d088889); the 12 read are conversions of 30 fps frame counts into seconds, not
+  per-frame increments. Not all were read.
+- The time of day is a float at clock object +0x30 (object main+0x1fefc38; GetTime main+0x1e7e34: hour = T/1800 mod
+  24, minute = T/30 mod 60). In the test save (chapter 1, Primordia at night) it is frozen at T = 1200 (00:40) in every
+  run, with and without the patch, so the clock's speed could not be measured. Two counters of the same object advance at
+  the same rate either way (`peek`, below; r10 / r11: 1.061 / 1.074 a second and 69,549 / 69,610 a second).
+
+**The patch** (`runtime/game_patches.c`, slug `60fps`, built in; 2.0.0 and 1.0.1). Two sites and two veneers, each word
+checked first (a mismatch stops the start):
+
+| Site (2.0.0 / 1.0.1) | Original | Patched |
+|---|---|---|
+| vsync count, +0x13db540 / +0x13eb280 | `52800040` mov w0, #2 (then `97ff1ea5` bl SetVsyncCount, checked) | `bl` veneer 1: `adrp x0, page; ldr w0, [x0, #4]; ret` |
+| GetFrameTime, +0x13a250c / +0x13b224c | `a9be7bfd` stp x29, x30, [sp, #-0x20]! (next two words checked) | `b` veneer 2: `adrp x16, page; ldr w17, [x16, #8]; cbz w17, 1f; ldr s0, [x16]; ret; 1: stp x29, x30, [sp, #-0x20]!; b GetFrameTime+4` |
+| veneers, +0x1735050 / +0x1744d90 (40 bytes) | the zero padding between main's text and its read-only data (checked) | the two veneers |
+
+The rewrite leaves all these words as they are (compared with `rewritten/<v>/main.patched.bin`). The page is the 16 KiB
+writable page the loader already reserves after main (TotK's real-time page): +0 the frame time in seconds, +4 N, +8 the
+mode. With the patch on: N = 1 (the limiter ends at 16.6 ms) and mode 1, GetFrameTime returns the mean of the last 4
+intervals between presents, each held to 1/60..1/20 s (`runtime_frame_step_update`, at every `nvnQueuePresentTexture`;
+gaps over 0.25 s start the mean again; "framestep <ms>" in the input file pins it). Below 20 fps the game slows, as the
+original does below 30. Every 1800 frames a line reports the mean (`[xcx] 60 fps frame step: ...`).
+
+How it is switched:
+
+- Mac: the launcher's new **Frame rate** row, "30 (original)" (default) / "60 (experimental)", saved as `frame_rate`, not
+  part of the presets; 60 adds `60fps` to `XCX_PATCHES`. `XCX_FRAME_RATE=30|60` from the environment wins for one start.
+  At 30 the runtime patches nothing (`[xcx] game patches: none`), as before. The present base stays `DM_PRESENT_HZ=60`
+  with the game's interval 1, so 60 frames a second are presented at 60 Hz.
+- iPhone / iPad: code cannot be written on the device, so `build_ipa.py` now exports main's text with the sites patched
+  (`XCX_PATCHES=60fps XCX_FPS60=0`; `export-ios.log`: `main ... patched_words=12`) and the device only checks the words
+  ("embedded at build time"). The new Settings entry **Frame rate** (`XCX_FRAME_RATE`, 30 by default) sets
+  `XCX_FPS60`; at 30 the page holds N = 2 and mode 0, so the game runs its own limiter and its own GetFrameTime code.
+  A launch environment value wins (`devicectl ... -e '{"XCX_FPS60":"1"}'`).
+- Terminal: `XCX_PATCHES=60fps`; `XCX_FPS60=0` keeps the sites but runs the original 30 fps (r16: 33.2-33.3 ms p50).
+
+New diagnostics, off by default: `XCX_CAMLOG=1` (`nvn_mtl.m`, `GAME_XCX`): the camera position of each frame from the
+scene block, with the host time, `=2` also the whole block once a second; input-file commands `peek <addr> <words>`
+and `memsnap <path> <addr> <len> ...` (`input.c`; addresses may be `main+<hex>`), which read memory and write nothing.
+
+**Verified** (MacBook Air M1 8-core GPU, 16 GB; 2.0.0; Continue into Primordia at night; dev runtime from `XCX_build`
+on a scratch copy of the profile, logs in the session scratchpad):
+
+| Run | Setting | Field frame rate | Walking (W held, steady 1 s windows) |
+|---|---|---|---|
+| r1, r5 | off | 30.1 fps, frame p50 33.23 ms, GPU p50 17.8 ms | 8.80 / 8.81 m/s |
+| r6 | N = 1 only | 44 fps | 6.26-6.54 m/s (game at 0.73x) |
+| r7 | `60fps` | 50.9 fps over the first 1800 frames, then 46.7, 41.2 | 8.70 / 8.87 / 8.87 m/s at 41-46 fps |
+| r15 | `60fps` | 51.1, 52.2, 46.8, 43.1 fps (1800-frame means); 30.6-57.3 per 150 frames | 8.80 m/s in the 51 fps window |
+| r3 | `60fps`-equivalent (N = 1 only, the user played) | 54.9 fps mean, 45-60 | (void: user input) |
+
+- The M1 is GPU-bound: at 60 fps targets the GPU needs 18-20 ms a frame (one in 17 ms at best), so the field stays at
+  about 45-57 fps. The fanless Air also heats up: the submission thread's clock (`翻译细项` line, `平均主频`) fell from
+  2.99 GHz in the first runs to 0.9-1.5 GHz after about an hour of runs, and within one run from 2.75 to 1.0 GHz in
+  2.5 minutes with the patch on. The later runs (r9-r14) are throttled at both settings (the 30 fps baseline then
+  missed 30 too) and are not used above.
+- Title screen and menus: no visual breakage at 60 fps (captures of the title, the field, the party menu and battles;
+  the HUD, minimap, damage numbers and the battle palette are as at 30). A battle starts and runs; auto-attack timing
+  was not measured reliably (the two battles compared started differently).
+- Self-contained app (`build_app.py ... --update xcx200.nsp -o XCX_build/test-fps/...app`, 2.2 min): `[launcher] frame
+  rate 60 (XCX_FRAME_RATE)`, `patches 60fps`, the patch applied; it stayed on the title (the RomFS was verified once for
+  the new app; `TOTK_AUTOLOAD` does not find this game's saves). The player's profile was byte-identical before and
+  after (10 files, SHA-256, against `personal/xcx-save-backups/profile-2026-10-23-before-fps`). The test app was deleted.
+- 1.0.1: built (`make runtime VERSION=v101`) and booted headless with `XCX_PATCHES=60fps` to `nnMain`:
+  `game patch 60fps (1.0.1): on ... vsync count main+0x13eb280, frame time main+0x13b224c`. Not played.
+- iPhone 15 Pro Max (iOS 27.2), 2.0.0 IPA rebuilt and installed with `install_device.py` (Documents kept; the save
+  folder backed up first to `personal/xcx-save-backups/iphone-2026-10-23-before-fps`), launched with `XCX_FPS60=1`:
+  `game patch 60fps (2.0.0): on ... (embedded at build time)`. The user played this session for about 90 s with a
+  controller (`[input] user input`), so it is not a scripted measurement: the title ran at 60 fps (frame p50 16.6 ms,
+  GPU 8-10 ms), the field at 52-58 fps for about a minute (first 1800 frames: mean 17.4 ms, 57.4 fps), then 36-43 fps
+  (frame p50 23-28 ms; next 1800 frames 45.9 fps) as the phone reached thermal state 2 (serious) about 60 s after the
+  save loaded; the submission thread went from 3-4 to 11 ms a frame while the GPU stayed at 10-12 ms, so the phone is
+  CPU-bound and throttled, not GPU-bound. The footprint was 1.9 GB.
+  A second launch (`XCX_FPS60=1`, `TOTK_INPUT_SCRIPT` pressing A at 75 / 95 s; `XCX_build/logs/ios/fps2/`, 8 minutes) was
+  also played by the user (`[input] user input` twice), so again not a clean measurement: 1800-frame means 58.8, 51.0,
+  50.5, 59.5 (x5, a light scene: GPU 2-3 ms), 45.5, then 50.5-51.2 fps for the last 4 minutes in the field (frame p50
+  19.1-19.9 ms, submission 7.0-7.3 ms, GPU 7.6-7.8 ms); thermal state 1 after about 1 minute, 2 (serious) after 7; no
+  frame held at 50 ms in that stretch, footprint 1.3-1.8 GB.
+
+**Risks / not done.** The two fixed-step subsystems above run slow below 60 fps; the time of day could not be checked
+at this point of the story; cutscenes (in-engine and movies), Skells, cities, swimming and UI animation speed were not
+compared; a battle's auto-attack interval was not measured. The game's busy-wait limiter still spins (now for less of
+each frame). On the M1 Air and the iPhone the higher frame rate heats the device faster, which brings the frame rate
+down again after a few minutes. 1.0.1 was not played with the patch.

@@ -232,7 +232,8 @@ XCX_FRAME_RATE=60 <app>` for one start), the iPhone / iPad Settings app (**Xenob
 30 is the default everywhere; with it the Mac runs unpatched code. The present base stays 60 Hz (`DM_PRESENT_HZ=60`).
 
 What was checked (2.0.0, Primordia at night, MacBook Air M1; the changelog has the numbers): the frame rate rises from 30
-to the GPU's limit (about 45-57 fps in the field on the M1, which needs about 18 ms of GPU a frame); walking speed is the
+to the GPU's limit (about 45-57 fps in the field on the M1, which needs about 18 ms of GPU a frame, less once the fanless
+Air heats up; an iPhone 15 Pro Max about 50-58 fps in the field, down to 36-45 fps at times when it got hot); walking speed is the
 same as at 30 fps (8.8 m/s); the clock's real-time counters advance at the same rate. Known limits: two of the game's
 subsystems step by a fixed 1/60 s a frame (they read the vsync count), so they run slower than normal while the game is
 below 60 fps; the time of day is frozen at that point of the story, so its speed could not be checked; cutscenes,

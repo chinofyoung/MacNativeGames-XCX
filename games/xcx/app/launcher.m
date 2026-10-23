@@ -206,9 +206,11 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
         else [s appendString:T("Esta app no contiene el juego: vuelve a crearla con build_app.py.", "This app does not hold the game: build it again with build_app.py.")];
         self.play.enabled = NO;
     }
-    if (self.fps.indexOfSelectedItem == 1)
+    if (self.fps.indexOfSelectedItem == 1) {
+        if (s.length) [s appendString:@" "];
         [s appendString:T("60 imágenes por segundo es experimental: el juego va a la velocidad correcta también por debajo de 60, pero algunos efectos y animaciones pueden ir algo lentos entonces. En un Mac lento la GPU no llega a 60.",
                           "60 fps is experimental: the game keeps its speed below 60 too, but some effects and animations can run a little slow then. A slower Mac's GPU does not reach 60.")];
+    }
     self.note.stringValue = s; self.note.hidden = !s.length;
 }
 - (void)save {
