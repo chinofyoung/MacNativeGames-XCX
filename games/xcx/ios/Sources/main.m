@@ -113,6 +113,50 @@ static void audio_observe(void) {
     }];
 }
 
+/* Memory and lifecycle readout in log.txt. iOS ends an app over its memory limit (jetsam) or for a watchdog without
+   telling it, so the numbers left beforehand are the only record of what grew: every 10 s the footprint the limit is
+   measured on (task_vm_info phys_footprint), the allowance left (os_proc_available_memory), the Metal device's
+   allocations and the guest memory the game committed. Memory warnings, the thermal state, going to the background and
+   the catchable termination signals are logged too (a SIGKILL from jetsam cannot be caught; its absence is the sign). */
+uint64_t dm_mtl_l3_sample(uint32_t tick);
+void runtime_guest_committed(uint64_t *heap_bytes, uint64_t *alias_mapped);
+#include <mach/mach.h>
+#include <os/proc.h>
+static uint64_t footprint_bytes(void) {
+    task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+    return task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? vi.phys_footprint : 0;
+}
+static void mem_line(const char *why) {
+    static CFAbsoluteTime t0; if (!t0) t0 = CFAbsoluteTimeGetCurrent();
+    uint64_t heap = 0, alias = 0; runtime_guest_committed(&heap, &alias);
+    fprintf(stderr, "[xcx-mem] %s t=%.0fs footprint=%llu MiB available=%llu MiB metal=%llu MiB guest=%llu MiB (heap %llu, mapped %llu) thermal=%ld\n",
+            why, CFAbsoluteTimeGetCurrent() - t0, (unsigned long long)(footprint_bytes() >> 20), (unsigned long long)(os_proc_available_memory() >> 20),
+            (unsigned long long)(dm_mtl_l3_sample(0) >> 20), (unsigned long long)((heap + alias) >> 20), (unsigned long long)(heap >> 20),
+            (unsigned long long)(alias >> 20), (long)NSProcessInfo.processInfo.thermalState);
+}
+static void on_term_signal(int sig) {
+    char m[64]; int n = snprintf(m, sizeof m, "[xcx] terminated by signal %d\n", sig); if (n > 0) write(2, m, (size_t)n);
+    signal(sig, SIG_DFL); raise(sig);
+}
+static void lifecycle_observe(void) {
+    for (int s = 0; s < 4; s++) signal((int[]){SIGTERM, SIGHUP, SIGINT, SIGALRM}[s], on_term_signal);
+    mem_line("start");
+    static dispatch_source_t timer;
+    timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), 10 * NSEC_PER_SEC, NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timer, ^{ mem_line("every 10 s"); });
+    dispatch_resume(timer);
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter; NSOperationQueue *main = NSOperationQueue.mainQueue;
+    NSDictionary<NSNotificationName, NSString *> *events = @{
+        UIApplicationDidReceiveMemoryWarningNotification: @"memory warning", UIApplicationWillResignActiveNotification: @"will resign active",
+        UIApplicationDidEnterBackgroundNotification: @"entered background", UIApplicationWillEnterForegroundNotification: @"entering foreground",
+        UIApplicationWillTerminateNotification: @"will terminate", NSProcessInfoThermalStateDidChangeNotification: @"thermal state changed" };
+    for (NSNotificationName name in events) {
+        NSString *what = events[name];
+        [nc addObserverForName:name object:nil queue:main usingBlock:^(NSNotification *n) { (void)n; mem_line(what.UTF8String); }];
+    }
+}
+
 @interface XCXApp : UIResponder <UIApplicationDelegate> @end
 @implementation XCXApp
 - (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
@@ -133,6 +177,7 @@ static void audio_observe(void) {
     for (NSString *name in @[@"save", @"temp", @"shader-cache", @"game-slot", @"GameData"]) [fm createDirectoryAtPath:[docs stringByAppendingPathComponent:name] withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *log = [docs stringByAppendingPathComponent:@"log.txt"];
     if (freopen(log.fileSystemRepresentation,"w",stderr)) setvbuf(stderr,NULL,_IOLBF,0);
+    lifecycle_observe();
     /* The app carries the RomFS index (GameData/romfs/runtime-index.bin, bound to the build by its SHA-256); the 14.3 GB
        image is installed once into Documents/GameData (romfs.bin, or romfs.bin.000, .001, ... in parts), by
        ios/tools/install_device.py --game-data or by copying it there in Finder / the Files app. Reinstalling the app keeps

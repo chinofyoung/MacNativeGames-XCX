@@ -1112,3 +1112,53 @@ while typing).
 **Verified on the device.** `RETURN nninitStartup`, the constructors, `nnMain`, the opening movies, the title screen,
 and character creation. The name was entered through the alert (`keyboard: "Please enter a name." ... -> "<the typed name>"`).
 The footprint was about 2.0 GB after 3 minutes, with no jetsam.
+
+### 2026-10-23: iPhone "closes after a few minutes": the test harness, not the game (and a memory readout)
+
+**Report.** On the iPhone 15 Pro Max (iOS 27.2), the app closed after a few minutes of play. Documents/log.txt ended
+in the middle of `AllocateMemoryPages` lines with no signal or FATAL line.
+
+**Termination reason.** No JetsamEvent named XCX. The only new one (21:00:47) killed `searchd` at its own limit, and
+XCX was not in its process list. The three `XCX.cpu_resource` reports (20:47, 20:52, 21:03) all say "Action taken:
+none". Neither run ended in a crash report. Both "closed" sessions were the timed console runs of the previous fix.
+Their devicectl output ends with `App terminated due to signal 14.` (`XCX_build/logs/ios/console-fix1.txt`,
+`console-fix2.txt`). Signal 14 is SIGALRM: the `perl -e 'alarm N; exec …' xcrun devicectl … --console` wrapper's
+alarm went to devicectl, which passed it on to the app. The runs lasted about 2 and 3 minutes, and the player was
+playing during them, so the app seemed to close by itself. Neither memory, a watchdog nor the GPU was involved.
+
+**Memory measured on the device** (new readout below; the limit is footprint + available, about 6.1 GB, so
+`increased-memory-limit` is in effect; the signing profile carries it). Run of 16 minutes, launched without `--console`, played
+by the user (two trips to the background):
+
+| t | footprint | available | Metal allocated | guest mapped |
+|---|---|---|---|---|
+| 11 s | 1603 MiB | 4540 MiB | 2063 MiB | 2184 MiB |
+| 2 min | 1855 | 4288 | 2142 | 2149 |
+| 5 min | 2018 | 4125 | 2238 | 2157 |
+| 10 min | 2029 | 4114 | 2247 | 2158 |
+| 13.7 min | 1913 | 4230 | 2250 | 2171 |
+| 16 min | 2118 | 4025 | 2327 | 2190 |
+
+The footprint levels off at about 2.0-2.1 GB, about 4 GB under the limit. The process was still running at the end,
+and it was left running for the player. The previous fix's 3-minute run (`[nvn] 上屏` lines) reads 1030 → 2048 MiB, the same
+start-up rise, not a leak. The thermal state reaches "serious" (2) within a minute and stays there: the CPU average is
+72-93% (the cpu_resource reports).
+
+**Change (`ios/Sources/main.m`, iOS only by file).** `lifecycle_observe()` (called right after log.txt opens) writes
+an `[xcx-mem]` line every 10 s: phys_footprint, os_proc_available_memory, the Metal device's currentAllocatedSize
+(`dm_mtl_l3_sample`), the guest memory committed (`runtime_guest_committed`) and the thermal state. It writes the same
+line on a memory warning, on resign-active, background, foreground and will-terminate, and on a thermal change. It
+logs `[xcx] terminated by signal N` for SIGTERM, SIGHUP, SIGINT and SIGALRM before re-raising. A jetsam kill
+(SIGKILL) cannot be caught, so a log that stops after an `[xcx-mem]` line with little `available` points to jetsam,
+and a log that ends in `terminated by signal 14` points to a timed harness. The Mac runtime is unchanged: `make runtime
+VERSION=v200 WORK=../../XCX_build` reports nothing to do.
+
+**For later test runs.** Do not time a run that someone plays with `alarm` around `devicectl --console`. Launch
+without `--console` and poll `Documents/log.txt` (`devicectl device copy from`) and `devicectl device info processes`
+instead.
+
+Logs: `XCX_build/logs/ios/run-mem1/` (timeline.txt, log.txt), `XCX_build/logs/ios/diag2/` (the reports).
+
+Still open: the high CPU load and the "serious" thermal state (30 fps with long frames); Metal allocations of about
+2.25 GB with 300,000 texture re-uploads in 16 minutes (`贴图重传累计`); no reaction to memory warnings yet. None
+came, so the texture-copy eviction (`pkg_evict_sweep`, below 600 MB available) never ran.
