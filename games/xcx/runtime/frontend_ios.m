@@ -78,7 +78,53 @@ static void app_active_changed(int active){
  fprintf(stderr,"[totk] app %s\n",active?"became active":"resigned active: GPU submission paused");
 }
 void runtime_front_request_close(void){fprintf(stderr,"[totk] close requested; iOS apps are closed by the user\n");}
-void runtime_front_text_test(const char *op,const char *text){(void)text;fprintf(stderr,"[totk] text entry test \"%s\" ignored: iOS has no text entry bar (the keyboard request is cancelled)\n",op?op:"");}
+void runtime_front_text_test(const char *op,const char *text){(void)text;fprintf(stderr,"[totk] text entry test \"%s\" ignored: iOS has no text entry bar\n",op?op:"");}
+/* Text entry for the game (nn::swkbd::ShowKeyboard, runtime/swkbd_host.c): an alert with one text field and the system
+   keyboard. OK stays disabled below the game's minimum length; the length limit and the characters the game disallows
+   are enforced again by the caller. The calling guest thread waits on a semaphore. */
+@interface TOTKTextAlert:NSObject<UITextFieldDelegate>
+@property int maxUnits,minUnits;
+@property(weak) UIAlertAction *ok;
+@end
+@implementation TOTKTextAlert
+-(BOOL)textField:(UITextField *)f shouldChangeCharactersInRange:(NSRange)r replacementString:(NSString *)s{
+ if(f.markedTextRange)return YES;   /* still composing (kana, pinyin) */
+ NSUInteger len=f.text.length-r.length+s.length;return self.maxUnits<=0||len<=(NSUInteger)self.maxUnits;
+}
+-(void)changed:(UITextField *)f{self.ok.enabled=f.text.length>0&&(NSInteger)f.text.length>=self.minUnits;}
+@end
+static UIViewController *front_presenter(void){
+ UIWindow *key=nil;
+ for(UIScene *scene in UIApplication.sharedApplication.connectedScenes)if([scene isKindOfClass:UIWindowScene.class])
+  for(UIWindow *w in ((UIWindowScene *)scene).windows)if(w.isKeyWindow||!key)key=w;
+ UIViewController *vc=key.rootViewController;while(vc.presentedViewController)vc=vc.presentedViewController;return vc;
+}
+int runtime_front_text_input(const RuntimeTextRequest *req,char *out,size_t out_size){
+ if(!req||!out||!out_size)return 0;
+ NSString *prompt=[NSString stringWithUTF8String:req->prompt?req->prompt:""]?:@"",*initial=[NSString stringWithUTF8String:req->initial?req->initial:""]?:@"";
+ int maxU=req->max_units,minU=req->min_units,digits=req->digits_only,secure=req->secure;
+ __block NSString *result=nil;dispatch_semaphore_t sem=dispatch_semaphore_create(0);
+ dispatch_async(dispatch_get_main_queue(), ^{
+  UIViewController *vc=front_presenter();
+  if(!vc){fprintf(stderr,"[totk] keyboard: no view controller to show text entry; cancelled\n");dispatch_semaphore_signal(sem);return;}
+  runtime_input_clear();
+  NSString *limit=maxU>0?[NSString stringWithFormat:@(TOTK_UI("最多 %d 个字","Up to %d characters")),maxU]:nil;
+  UIAlertController *a=[UIAlertController alertControllerWithTitle:prompt message:limit preferredStyle:UIAlertControllerStyleAlert];
+  TOTKTextAlert *d=[TOTKTextAlert new];d.maxUnits=maxU;d.minUnits=minU;
+  [a addTextFieldWithConfigurationHandler:^(UITextField *f){
+   f.text=initial;f.delegate=d;f.secureTextEntry=secure!=0;f.keyboardType=digits?UIKeyboardTypeNumberPad:UIKeyboardTypeDefault;
+   f.autocorrectionType=UITextAutocorrectionTypeNo;f.returnKeyType=UIReturnKeyDone;
+   [f addTarget:d action:@selector(changed:) forControlEvents:UIControlEventEditingChanged];}];
+  __weak UIAlertController *wa=a;
+  [a addAction:[UIAlertAction actionWithTitle:@(TOTK_UI("取消","Cancel")) style:UIAlertActionStyleCancel handler:^(UIAlertAction *x){(void)x;(void)d;dispatch_semaphore_signal(sem);}]];
+  UIAlertAction *ok=[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){(void)x;result=[wa.textFields.firstObject.text copy]?:@"";dispatch_semaphore_signal(sem);}];
+  [a addAction:ok];a.preferredAction=ok;d.ok=ok;[d changed:a.textFields.firstObject];
+  [vc presentViewController:a animated:YES completion:nil];
+ });
+ dispatch_semaphore_wait(sem,DISPATCH_TIME_FOREVER);
+ if(!result)return 0;
+ snprintf(out,out_size,"%s",result.UTF8String?:"");return 1;
+}
 
 @interface TOTKVsync:NSObject
 @end

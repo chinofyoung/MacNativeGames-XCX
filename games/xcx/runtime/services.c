@@ -24,13 +24,19 @@
 #define GUEST_ADDRESS_LIMIT (1ULL<<39)
 #define ALIAS_SPACE_AT 0x7000000000ULL
 #define ALIAS_SIZE_MAX (64ULL<<30)
-/* TOTK_ALIAS_GIB: alias region size reported to the game (default 64, the real 39-bit Horizon size). An iOS app signed
-   without extended virtual addressing (unavailable to personal teams) gets a much smaller map: the old 6 + 16 GiB
-   reservation failed on an iPhone, while 4.75 + 16 GiB fit on an iPad (A16, iPadOS 26.7). So the largest size from 16
-   down to 4 GiB that fits is chosen at startup; the game maps about 3.3 GiB of it. */
+/* TOTK_ALIAS_GIB: alias region size reported to the game (default 64, the real 39-bit Horizon size).
+   iOS: an app signed without extended virtual addressing (unavailable to personal teams) has a map that ends at 2^39,
+   with 64 GiB free at 0x70_0000_0000 and only scattered small gaps below (iPhone 15 Pro Max, iOS 27.2: the VA probe
+   below logs them). Xenoblade Chronicles X's nninitStartup asks nn::os::AllocateAddressRegion for a fixed 60 GiB
+   (main 2.0.0 +0x13e3fb0, `mov x0,#0xf00000000`) and does not check the result. The SDK's VammManager hands out that
+   region from the alias region after its own ~1 GiB page-table area (GetInfo 2/3 minus 28), so the alias region needs
+   at least 61.25 GiB. The game touches only about 7 GiB of the region (Mac logs), and the reservation is PROT_NONE, so
+   the address space costs no memory. So on iOS the stack+heap block is kept small (the game never sets a heap) and the
+   alias region takes the rest of the 64 GiB, shrinking in 256 MiB steps to ALIAS_MIN_BYTES. */
 #if TARGET_OS_IPHONE
-#define ALIAS_DEFAULT_GIB 16
-#define ALIAS_MIN_GIB 4ULL
+#define ALIAS_DEFAULT_GIB 64
+#define ALIAS_MIN_BYTES (0xf00000000ULL+(5ULL<<28))   /* the game's 60 GiB region + VammManager's 1 GiB + 256 MiB slack */
+#define ALIAS_STEP (256ULL<<20)
 #else
 #define ALIAS_DEFAULT_GIB 64
 #endif
@@ -58,7 +64,11 @@ static unsigned char alias_stale[ALIAS_SIZE_MAX/4096];
 static uint64_t alias_bytes;
 static uint8_t user_exception_context[0x1000] __attribute__((aligned(0x1000)));
 #define SYSTEM_RESOURCE_BUDGET (32ULL<<20)
+#if TARGET_OS_IPHONE
+#define HEAP_CAP (512ULL<<20)   /* iOS: address space is scarce (see ALIAS_DEFAULT_GIB) and Xenoblade Chronicles X sets no heap */
+#else
 #define HEAP_CAP (4ULL<<30)   /* the cap of the original MacNativeGames TotK code (TotK 1.4.3 sets a 2.2 GiB heap during nninitStartup) */
+#endif
 #define APP_POOL app_pool()
 static uint64_t app_pool(void){static uint64_t v;if(!v){const char *e=getenv("TOTK_APP_POOL");uint64_t extra=(runtime_output_res_extra_bytes()+0x1fffff)&~0x1fffffULL;
  v=e?strtoull(e,NULL,0):0xcd500000ULL+extra;if(!e&&extra)fprintf(stderr,"[totk] application pool %#llx: +%llu MiB for the true-2K texture heaps (TOTK_OUTPUT_RES)\n",(unsigned long long)v,(unsigned long long)(extra>>20));}return v;}
@@ -91,16 +101,45 @@ static uint8_t *reserve_in_gap(uint64_t size,int log){
   prev=r+rsize;
  }
 }
+/* Log what this process may reserve: every free gap of the map (at least 256 MiB) up to 2^40, the largest single
+   reservation the system places anywhere, and the largest one that ends below 2^39 (where guest memory must be). */
+static uint64_t largest_anywhere(uint64_t *at){
+ uint64_t lo=0,hi=1ULL<<40;   /* in 256 MiB steps */
+ while(hi-lo>(256ULL<<20)){uint64_t mid=((lo+hi)/2)&~((256ULL<<20)-1);mach_vm_address_t a=0;
+  if(mach_vm_map(mach_task_self(),&a,mid,0,VM_FLAGS_ANYWHERE,MEMORY_OBJECT_NULL,0,FALSE,VM_PROT_NONE,VM_PROT_ALL,VM_INHERIT_DEFAULT)==KERN_SUCCESS){*at=a;mach_vm_deallocate(mach_task_self(),a,mid);lo=mid;}else hi=mid;}
+ return lo;
+}
+static void va_probe(void){
+ uint64_t prev=1ULL<<32,below=0,below_at=0,last_end=0;
+ for(;;){
+  mach_vm_address_t r=prev;mach_vm_size_t rsize=0;vm_region_basic_info_data_64_t info;mach_msg_type_number_t n=VM_REGION_BASIC_INFO_COUNT_64;mach_port_t obj=MACH_PORT_NULL;
+  int more=mach_vm_region(mach_task_self(),&r,&rsize,VM_REGION_BASIC_INFO_64,(vm_region_info_t)&info,&n,&obj)==KERN_SUCCESS;
+  if(obj)mach_port_deallocate(mach_task_self(),obj);
+  uint64_t start=(prev+GUEST_ALIGN-1)&~(GUEST_ALIGN-1),end=more?r:(1ULL<<40);
+  if(!more){   /* the end of the map is not reported: find how far a reservation from start reaches */
+   uint64_t lo=0,hi=end>start?end-start:0;while(hi-lo>(256ULL<<20)){uint64_t mid=((lo+hi)/2)&~((256ULL<<20)-1);uint8_t *p=reserve_fixed(start,mid);if(p){mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)start,mid);lo=mid;}else hi=mid;}
+   end=start+lo;}
+  if(end>start&&end-start>=(256ULL<<20)){fprintf(stderr,"[totk-mem] VA free %#llx..%#llx (%.2f GiB)%s\n",(unsigned long long)start,(unsigned long long)end,(double)(end-start)/(1ULL<<30),more?"":" (end of map, probed)");
+   uint64_t e=end<GUEST_ADDRESS_LIMIT?end:GUEST_ADDRESS_LIMIT;if(e>start&&e-start>below){below=e-start;below_at=start;}}
+  if(!more){last_end=end;break;}
+  prev=r+rsize;
+ }
+ uint64_t at=0,any=largest_anywhere(&at);
+ fprintf(stderr,"[totk-mem] VA probe: largest reservation %.2f GiB (at %#llx), largest below 2^39 %.2f GiB (at %#llx), map end %#llx\n",
+  (double)any/(1ULL<<30),(unsigned long long)at,(double)below/(1ULL<<30),(unsigned long long)below_at,(unsigned long long)last_end);
+}
 #endif
 static void memory_init(void) {
  if(alias_space)return;
 #if TARGET_OS_IPHONE
  /* iOS: stack+heap and the alias region go side by side in one reservation (ASLR_SIZE spans both), placed in the lowest
     free gap that holds them. The free space depends on the device, so the alias region shrinks from the requested size
-    to ALIAS_MIN_GIB before giving up (logging the free gaps); TOTK_ALIAS_GIB pins one size. */
- uint64_t want=alias_requested(),least=getenv("TOTK_ALIAS_GIB")?want:(ALIAS_MIN_GIB<<30);
- for(uint64_t a=want;a>=least&&!low_space;a-=1ULL<<30)if((low_space=reserve_in_gap(LOW_SIZE+a,0)))alias_len=a;
- if(!low_space){reserve_in_gap(UINT64_MAX,1);runtime_fail("reserve guest stack, heap and alias regions");}
+    to ALIAS_MIN_BYTES before giving up (logging the free gaps); TOTK_ALIAS_GIB pins one size. */
+ va_probe();
+ uint64_t want=alias_requested(),least=getenv("TOTK_ALIAS_GIB")?want:ALIAS_MIN_BYTES;
+ for(uint64_t a=want;a>=least&&!low_space;a-=ALIAS_STEP)if((low_space=reserve_in_gap(LOW_SIZE+a,0)))alias_len=a;
+ if(!low_space){reserve_in_gap(UINT64_MAX,1);fprintf(stderr,"[totk] the game needs a %#llx-byte alias region (its 60 GiB address region) plus %#llx for stack and heap below 2^39\n",(unsigned long long)least,(unsigned long long)LOW_SIZE);
+  runtime_fail("reserve guest stack, heap and alias regions");}
  alias_space=low_space+LOW_SIZE;
 #else
  alias_space=reserve_fixed(ALIAS_SPACE_AT,ALIAS_SIZE);
@@ -376,7 +415,11 @@ uint64_t runtime_svc(unsigned num,uint64_t *r,const char *module,uint64_t offset
   if(r[0])memcpy((void *)(uintptr_t)r[0],&info,sizeof(info));r[0]=0;r[1]=0;return 0;
  }
  case 0x01:{size_t size=r[1];if(getenv("TOTK_MEM_LOG"))fprintf(stderr,"[totk-mem] SetHeapSize %#zx (image=%#llx alias=%#llx pool=%#llx)\n",size,(unsigned long long)runtime_image_bytes(),(unsigned long long)alias_bytes,(unsigned long long)APP_POOL);
-  if(size>HEAP_CAP||size%0x200000||size+runtime_image_bytes()>APP_POOL){r[0]=0xd401;return r[0];}
+  if(size>HEAP_CAP||size%0x200000||size+runtime_image_bytes()>APP_POOL){
+#if TARGET_OS_IPHONE
+   fprintf(stderr,"[totk] SetHeapSize %#zx refused (cap %#llx)\n",size,(unsigned long long)HEAP_CAP);
+#endif
+   r[0]=0xd401;return r[0];}
   if(size>heap_size&&mprotect(heap+heap_size,size-heap_size,PROT_READ|PROT_WRITE))runtime_fail("commit heap");
   if(size<heap_size&&mprotect(heap+size,heap_size-size,PROT_NONE))runtime_fail("decommit heap");heap_size=size;r[0]=0;r[1]=(uintptr_t)heap;return 0;}
  case 0x0c: r[0]=0;r[1]=44;return 0;

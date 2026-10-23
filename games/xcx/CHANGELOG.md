@@ -1085,3 +1085,30 @@ of the profile). No battle in 2.0.0. The window's file pickers were not clicked 
 install section's Install button was not pressed. The old `build/xcx-native`, `build/launcher` and the three generated
 headers directly in `build/` are 1.0.1 leftovers of the old layout; nothing uses them now.
 
+
+### 2026-10-23: iPhone startup crash in `nninitStartup` (60 GiB address region), and text entry on iOS
+
+**Crash.** On an iPhone 15 Pro Max (iOS 27.2, free Personal Team), 2.0.0 stopped with SIGSEGV right after
+`AllocateAddressRegion size=f00000000 result=1803`. The game's `nninitStartup` asks `nn::os::AllocateAddressRegion` for a
+fixed 60 GiB (main 2.0.0 +0x13e3fb0, `mov x0,#0xf00000000`; the region allocator at +0xb9b350 does not check the
+result). The SDK's `VammManager` hands regions out of the alias region (GetInfo 2/3 minus 28), after its own ~1 GiB
+page-table area (+0x3fe00000), so on the Mac's 64 GiB alias the region is at alias+1 GiB. The iOS layout gave only
+16 GiB of alias. The game touches about 7 GiB of the region (Mac logs: highest page at +0x1c2a40000).
+
+**What iOS allows** (new `[totk-mem] VA` probe lines in log.txt): without extended virtual addressing the map ends at
+2^39. There is 64 GiB free at 0x70_0000_0000 and about 1.3 GiB in small gaps below it. The largest single reservation is
+64 GiB. The profile grants only `increased-memory-limit` (checked in the signed profile).
+
+**Fix (`runtime/services.c`, iOS only).** The alias default is 64 GiB, shrinking in 256 MiB steps down to 61.25 GiB
+(the 60 GiB region + VammManager's 1 GiB + slack). Below that, startup stops with a message instead of a null write.
+The iOS heap cap is 512 MiB (the game sets no heap). Stack+heap then take 1.25 GiB, and the alias region gets 62.75 GiB:
+`alias 0x7050000000+0xfb0000000`. The reservation is PROT_NONE and pages are committed only when mapped, as before. The
+Mac path is unchanged.
+
+**Text entry on iOS.** `swkbd_host.c` now calls `runtime_front_text_input` on iOS too. `frontend_ios.m` shows an alert
+with one text field (the system keyboard; OK is disabled below the minimum length, and the maximum length is enforced
+while typing).
+
+**Verified on the device.** `RETURN nninitStartup`, the constructors, `nnMain`, the opening movies, the title screen,
+and character creation. The name was entered through the alert (`keyboard: "Please enter a name." ... -> "<the typed name>"`).
+The footprint was about 2.0 GB after 3 minutes, with no jetsam.
