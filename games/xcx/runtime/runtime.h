@@ -86,14 +86,10 @@ void runtime_front_run(void(*callback)(void));
 void runtime_boot_progress(const char *stage,uint64_t done,uint64_t total);
 void runtime_boot_status(const char *stage,const char *detail);
 void runtime_boot_count(const char *stage,uint64_t done,uint64_t total);   /* a boot step counted in items (shader import) */
-/* True 2K (runtime/game_patches.c, Mac): TOTK_OUTPUT_RES=<w>x<h> sets the game's own output size. runtime_output_res gives it
-   (0 when unset); runtime_output_res_extra_bytes is what the HeapDef overlay (scripts/make_output_res_overlay.py, same formula)
-   adds to the texture heap and to Graphics, and so to the application pool (runtime/services.c). */
+/* TotK's true 2K output (its TOTK_OUTPUT_RES patch and HeapDef overlay) is not part of this port: runtime/game_patches.c
+   answers these with "no output size" and no extra heap, for the callers in romfs.c and services.c. */
 int runtime_output_res(unsigned *w,unsigned *h);
 uint64_t runtime_output_res_extra_bytes(void);
-int runtime_output_res_toggle(void);                    /* legacy two-state output size switch */
-int runtime_output_mode_cycle(void);                    /* key 3: MetalFX 2K -> native 2K -> off */
-uint64_t runtime_output_size_current(void);              /* configured canvas: width in low 32 bits, height in high 32 bits */
 void runtime_warm_progress(uint64_t done,uint64_t total,uint64_t shaders,uint64_t shader_total,uint64_t pipelines,uint64_t pipeline_total);
 void runtime_warm_done(void);
 void runtime_game_slot_acquire(const char *mode);   /* runtime/game_slot.c: one game at a time */
@@ -101,8 +97,7 @@ void *runtime_front_override(const char *name);
 int runtime_front_focus(void);
 void runtime_shortcut_help_toggle(void);
 int fps_overlay_toggle_hints(void);   /* shared key 1 toggle for FPS, shader and system-load overlays */
-int runtime_aspect_toggle(void);   /* runtime/aspect_patch.h: key 4, 16:9 <-> ultrawide (Mac, 1.2.1 / 1.4.3); 0 where unavailable */
-float runtime_aspect_now(void);     /* the ratio in force, 0 = the game's own 16:9 */
+float runtime_aspect_now(void);     /* the ultrawide ratio in force (TotK's aspect patch, not part of this port): always 0, the game's own 16:9 */
 int hud_compact(void);   /* gfx/nvn/fps_overlay.c: the overlay lines go to the window's corner panel (TOTK_HUD=corners: in the picture) */
 int hud_snapshot(int line, char *out, size_t n, int *highlight);   /* line 0..2: FPS, shaders, load; 0 = not published */
 

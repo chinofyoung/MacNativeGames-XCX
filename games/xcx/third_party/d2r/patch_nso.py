@@ -638,8 +638,9 @@ def func_of(a):
     i = bisect.bisect_right(starts, a) - 1
     return (starts[i], starts[i + 1] if i + 1 < len(starts) else TEXT_END) if i >= 0 else (a, a + 4)
 done = set(); windows = []; window_groups = []; jumps = {}; calls = {}
-# Signed 32-bit offset tables added in TOTK 1.4.3. Validate both the dispatch
-# instructions and every table entry before using a bounded landing-pad span.
+# Signed 32-bit offset tables found in TotK 1.4.3's main (the original MacNativeGames TotK rewriter); keyed by build ID,
+# so none applies to Xenoblade Chronicles X. Validate both the dispatch instructions and every table entry before using
+# a bounded landing-pad span.
 # Each tuple is (ADR base, table address, expected offsets, dispatch bytes).
 SIGNED_TABLES = {'277178b7dba1b6d4949a84778d4abc58': {
     0x393bb0: (0x393ba0, 0x2d8626c, (764,260,248,20,80,1028), '12000010217aa0b85202018b2001271e40021fd6'),

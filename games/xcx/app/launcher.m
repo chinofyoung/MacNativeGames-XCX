@@ -1,7 +1,7 @@
 /* Xenoblade Chronicles X launcher: a settings window with presets, then the game. Forked from Bayonetta 3's launcher.
    The presets are Xenoblade Chronicles X's (stage 5): the game's own 30 fps, no MetalFX upscaling, no frame interpolation,
-   the compact HUD: the configuration every stage-4 run was verified with. The 60 / 120 fps, fixed-900p, LOD and grain
-   choices need exefs patches nobody has made for this game yet; the window names any missing one and leaves it out.
+   the compact HUD: the configuration every stage-4 run was verified with. Bayonetta 3's 60 / 120 fps, fixed-900p,
+   improved-LOD and film-grain choices were removed: they named exefs patches that do not exist for this game.
    Two kinds of app (scripts/app_bundle.py):
    - self-contained (the root build_app.py): the game folder is inside the app, Contents/Resources/xcx (the binary, the
      rewritten code, the RomFS index and fonts; the RomFS image is the signed data bundle in Contents/Helpers that
@@ -13,17 +13,15 @@
    The self-contained mode is used when Contents/Resources/xcx holds the game binary and XCX_WORK is not set.
    Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
    What each setting does in the runtime:
-   - Frame rate: 30 = the game's own pacing (30 / 60 by scene); 60 = the 60 fps patch; 120 = the 60 fps patch on a 120 Hz
-     present base (experimental: correct only if the game advances by real time, not by frames).
-   - Internal resolution: dynamic (the game's own, up to 1600x900) or fixed 900p (patches/res-1600x900, else the
-     community "Force Scaling 900p" patch). Larger internal sizes do not start yet (the game's texture heaps).
+   - Frame rate and internal resolution are the game's own (30 fps; dynamic, up to 1600x900), on a 60 Hz present base
+     (DM_PRESENT_HZ=60, what the 30 fps presets always set).
    - Monitor (XCX_DISPLAY), window or full screen (XCX_FULLSCREEN), window size (TOTK_WINDOW_SIZE), the full-screen
      output resolution (TOTK_DRAWABLE_SCALE relative to the monitor's pixels) and the scaler (MetalFX spatial upscaling of
      the game's picture to the output, TOTK_MFX_UPSCALE / TOTK_MFX_OUTPUT, or plain linear scaling).
-   - Extras: improved LOD (off in every preset: it breaks the geometry here), no film grain (patches); the RomFS
-     interface mod; the FPS / resolution HUD.
-   Patches come from <game folder>/patches (scripts/prepare_patches.py, make_res_patch.py); a missing one is left out
-   and the window says so.
+   - The RomFS interface mod; the FPS / resolution HUD.
+   Player exefs patches (scripts/prepare_patches.py -> <game folder>/patches/<slug>.tsv) have no setting: XCX_PATCHES
+   from the environment (open --env XCX_PATCHES=<slug>,<slug> <app>) reaches the runtime unchanged
+   (runtime/game_patches.c); unset, none is applied.
    Progress: the player's profile (account, saves, pseudo device id, pipeline list) is in Application Support
    (MacNativeGames/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
    terminal runs use), so Continue loads the same save; the originals are never moved or changed (development apps
@@ -40,13 +38,12 @@ static BOOL spanish(void) { return [NSLocale.preferredLanguages.firstObject hasP
 #define T(es, en) (spanish() ? @es : @en)
 
 /* output: 0 = the monitor's native pixels, else the height of a 16:9 output (2160, 1440, 1080, 900). */
-typedef struct { const char *name_es, *name_en; int fps, fixed900, fullscreen, metalfx, output, lod, nograin, size; } Preset;
-static const Preset presets[] = {   // XCX: no MetalFX (spatial upscaling not yet checked for this game; key 3 still toggles it)
-    {"Original (30 fps, ventana)", "Original (30 fps, window)", 30, 0, 0, 0, 0, 0, 0, 2},
-    {"Original (30 fps, pantalla completa)", "Original (30 fps, full screen)", 30, 0, 1, 0, 0, 0, 0, 2},
+typedef struct { const char *name_es, *name_en; int fullscreen, metalfx, output, size; } Preset;
+static const Preset presets[] = {   // XCX: no MetalFX (spatial upscaling not yet checked for this game)
+    {"Original (30 fps, ventana)", "Original (30 fps, window)", 0, 0, 0, 2},
+    {"Original (30 fps, pantalla completa)", "Original (30 fps, full screen)", 1, 0, 0, 2},
 };
 enum { NPRESETS = sizeof presets / sizeof *presets };
-static const int fps_values[] = {30, 60, 120};
 static const int sizes[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
 static const int outputs[] = {0, 2160, 1440, 1080, 900};
 
@@ -64,10 +61,6 @@ static NSString *work_folder(void) {
     return bundle_root() ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXWorkFolder"];
 }
 static NSString *data_folder(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/XCX"]; }
-static BOOL have_patch(NSString *slug) {
-    return [NSFileManager.defaultManager fileExistsAtPath:[work_folder() stringByAppendingFormat:@"/patches/%@.tsv", slug]];
-}
-static NSString *fixed900_patch(void) { return have_patch(@"res-1600x900") ? @"res-1600x900" : have_patch(@"force-scaling-900p-v3") ? @"force-scaling-900p-v3" : nil; }
 /* RomFS mods: <work>/../mods/<name>/romfs with a manifest.tsv (make mods); a self-contained app: <data>/mods. */
 static NSString *mods_folder(void) {
     return self_contained() ? [data_folder() stringByAppendingPathComponent:@"mods"]
@@ -84,9 +77,9 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 
 @interface Launcher : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property NSWindow *window;
-@property NSPopUpButton *preset, *size, *internal, *monitor, *output, *mod;
-@property NSSegmentedControl *fps, *display, *scaler;
-@property NSButton *lod, *grain, *hud, *play; @property NSTextField *note;
+@property NSPopUpButton *preset, *size, *monitor, *output, *mod;
+@property NSSegmentedControl *display, *scaler;
+@property NSButton *hud, *play; @property NSTextField *note;
 @property NSArray<NSString *> *mods; @property BOOL applying, launch;
 @end
 
@@ -103,8 +96,6 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     for (int i = 0; i < NPRESETS; i++) [self.preset addItemWithTitle:spanish() ? @(presets[i].name_es) : @(presets[i].name_en)];
     [self.preset addItemWithTitle:T("Personalizado", "Custom")];
     self.preset.target = self; self.preset.action = @selector(presetChanged:);
-    self.fps = [self segments:@[@"30", @"60", T("120 (experimental)", "120 (experimental)")]];
-    self.internal = [self popup:@[T("Dinámica (la del juego, hasta 900p)", "Dynamic (the game's own, up to 900p)"), T("900p fija", "Fixed 900p")]];
     self.monitor = [NSPopUpButton new]; self.monitor.target = self; self.monitor.action = @selector(monitorChanged:);
     for (NSScreen *s in NSScreen.screens) {
         NSSize px = screen_pixels(s);
@@ -116,8 +107,6 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     self.size = [self popup:sizeTitles];
     self.output = [NSPopUpButton new]; self.output.target = self; self.output.action = @selector(changed:);
     self.scaler = [self segments:@[T("MetalFX (más nítido)", "MetalFX (sharper)"), T("Normal", "Plain")]];
-    self.lod = [NSButton checkboxWithTitle:T("LOD mejorado (más detalle a distancia)", "Improved LOD (more distant detail)") target:self action:@selector(changed:)];
-    self.grain = [NSButton checkboxWithTitle:T("Quitar el grano de película", "Remove film grain") target:self action:@selector(changed:)];
     self.mod = [self popup:@[T("Ninguno", "None")]]; self.mods = romfs_mods(); [self.mod addItemsWithTitles:self.mods];
     self.hud = [NSButton checkboxWithTitle:T("Mostrar FPS y resolución (tecla 1 lo oculta)", "Show FPS and resolution (key 1 hides it)") target:self action:@selector(changed:)];
     self.note = [NSTextField wrappingLabelWithString:@""]; self.note.textColor = NSColor.secondaryLabelColor; self.note.font = [NSFont systemFontOfSize:11];
@@ -126,15 +115,11 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 
     NSGridView *grid = [NSGridView gridViewWithViews:@[
         @[[self label:T("Preset", "Preset")], self.preset],
-        @[[self label:T("Fotogramas por segundo", "Frame rate")], self.fps],
-        @[[self label:T("Resolución interna", "Internal resolution")], self.internal],
         @[[self label:T("Monitor", "Monitor")], self.monitor],
         @[[self label:T("Pantalla", "Display")], self.display],
         @[[self label:T("Tamaño de la ventana", "Window size")], self.size],
         @[[self label:T("Resolución de salida", "Output resolution")], self.output],
         @[[self label:T("Escalado", "Scaling")], self.scaler],
-        @[[self label:T("Mejoras", "Extras")], self.lod],
-        @[NSGridCell.emptyContentView, self.grain],
         @[[self label:T("Mod de interfaz", "Interface mod")], self.mod],
         @[[self label:T("Información", "Info")], self.hud],
     ]];
@@ -180,20 +165,17 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
     NSString *mod = [d stringForKey:@"mod"]; NSUInteger i = mod ? [self.mods indexOfObject:mod] : NSNotFound;
     [self.mod selectItemAtIndex:i == NSNotFound ? 0 : (NSInteger)i + 1];
 }
+/* Keys of removed settings (fps, fixed900, lod, nograin) that older versions saved are no longer read. */
 - (void)load:(NSUserDefaults *)d {
-    int fps = (int)[d integerForKey:@"fps"]; self.fps.selectedSegment = fps == 120 ? 2 : fps == 30 ? 0 : 1;
-    [self.internal selectItemAtIndex:[d boolForKey:@"fixed900"]]; self.display.selectedSegment = [d boolForKey:@"fullscreen"];
+    self.display.selectedSegment = [d boolForKey:@"fullscreen"];
     NSInteger s = [d objectForKey:@"size"] ? [d integerForKey:@"size"] : 2; [self.size selectItemAtIndex:s >= 0 && s < 4 ? s : 2];
     self.scaler.selectedSegment = [d boolForKey:@"metalfx"] ? 0 : 1;   // XCX: off unless chosen
     [self fillOutputs:(int)[d integerForKey:@"output"]];
-    self.lod.state = [d boolForKey:@"lod"]; self.grain.state = [d boolForKey:@"nograin"];
 }
 - (void)applyPreset:(int)i {
     const Preset *p = &presets[i]; self.applying = YES;
-    [self.preset selectItemAtIndex:i]; self.fps.selectedSegment = p->fps == 30 ? 0 : p->fps == 60 ? 1 : 2;
-    [self.internal selectItemAtIndex:p->fixed900]; self.display.selectedSegment = p->fullscreen; [self.size selectItemAtIndex:p->size];
-    self.scaler.selectedSegment = p->metalfx ? 0 : 1; [self fillOutputs:p->output];
-    self.lod.state = p->lod; self.grain.state = p->nograin; self.applying = NO;
+    [self.preset selectItemAtIndex:i]; self.display.selectedSegment = p->fullscreen; [self.size selectItemAtIndex:p->size];
+    self.scaler.selectedSegment = p->metalfx ? 0 : 1; [self fillOutputs:p->output]; self.applying = NO;
 }
 /* Every change is saved at once (and written to disk), so the next start shows the same choices. */
 - (void)presetChanged:(id)sender { (void)sender; NSInteger i = self.preset.indexOfSelectedItem; if (i < NPRESETS) [self applyPreset:(int)i]; [self refresh]; [self save]; }
@@ -205,19 +187,7 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 - (void)refresh {
     BOOL full = self.display.selectedSegment == 1;
     self.size.enabled = !full; self.output.enabled = full;
-    NSMutableArray *missing = [NSMutableArray array];
-    if (self.fps.selectedSegment > 0 && !have_patch(@"60fps")) [missing addObject:@"60fps"];
-    if (self.internal.indexOfSelectedItem == 1 && !fixed900_patch()) [missing addObject:@"res-1600x900 / Force Scaling 900p"];
-    if (self.lod.state && !have_patch(@"improved-lod-v2")) [missing addObject:@"Improved LOD v2"];
-    if (self.grain.state && !have_patch(@"remove-film-grain")) [missing addObject:@"Remove Film Grain"];
     NSMutableString *s = [NSMutableString string];
-    if (self.fps.selectedSegment == 2) {
-        [s appendString:T("120 fps es experimental: si el juego se ve acelerado, vuelve a 60. ", "120 fps is experimental: if the game looks sped up, go back to 60. ")];
-        if (self.chosenScreen.maximumFramesPerSecond < 120) [s appendString:T("Este monitor no llega a 120 Hz. ", "This monitor does not reach 120 Hz. ")];
-    }
-    if (missing.count)
-        [s appendFormat:T("Faltan estos parches y se omitirán: %@ (make patches). ", "These patches are missing and will be left out: %@ (make patches). "),
-                          [missing componentsJoinedByString:@", "]];
     self.play.enabled = YES;
     if (!work_folder() || ![NSFileManager.defaultManager isExecutableFileAtPath:[work_folder() stringByAppendingPathComponent:@"build/xcx-native"]]) {
         if (work_folder()) [s appendFormat:T("No encuentro el juego en %@.", "The game is not in %@."), work_folder()];
@@ -229,11 +199,10 @@ static NSString *screen_name(NSScreen *s) { return s.localizedName ?: @"?"; }
 - (void)save {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setInteger:self.preset.indexOfSelectedItem forKey:@"preset"];
-    [d setInteger:fps_values[self.fps.selectedSegment] forKey:@"fps"]; [d setBool:self.internal.indexOfSelectedItem == 1 forKey:@"fixed900"];
     [d setBool:self.display.selectedSegment == 1 forKey:@"fullscreen"]; [d setInteger:self.size.indexOfSelectedItem forKey:@"size"];
     [d setInteger:self.output.selectedItem.tag forKey:@"output"]; [d setBool:self.scaler.selectedSegment == 0 forKey:@"metalfx"];
     [d setObject:screen_name(self.chosenScreen) forKey:@"monitor"];
-    [d setBool:self.lod.state forKey:@"lod"]; [d setBool:self.grain.state forKey:@"nograin"]; [d setBool:self.hud.state forKey:@"hud"];
+    [d setBool:self.hud.state forKey:@"hud"];
     if (self.mod.indexOfSelectedItem > 0) [d setObject:self.mods[self.mod.indexOfSelectedItem - 1] forKey:@"mod"]; else [d removeObjectForKey:@"mod"];
     CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // the launcher then replaces itself with the game (exec)
 }
@@ -297,13 +266,8 @@ int main(int argc, char **argv) {
         }
         if (chdir(work.fileSystemRepresentation)) { fail(work); return 1; }   // the runtime reads extracted/ and rewritten/ relative to it
 
-        int fps = (int)[d integerForKey:@"fps"]; NSMutableArray *patches = [NSMutableArray array];
-        if (fps >= 60 && have_patch(@"60fps")) [patches addObject:@"60fps"];
-        if ([d boolForKey:@"fixed900"] && fixed900_patch()) [patches addObject:fixed900_patch()];
-        if ([d boolForKey:@"lod"] && have_patch(@"improved-lod-v2")) [patches addObject:@"improved-lod-v2"];
-        if ([d boolForKey:@"nograin"] && have_patch(@"remove-film-grain")) [patches addObject:@"remove-film-grain"];
-        setenv("XCX_PATCHES", [patches componentsJoinedByString:@","].UTF8String, 1);
-        setenv("DM_PRESENT_HZ", fps == 120 ? "120" : "60", 1);
+        /* XCX_PATCHES is left as the environment has it (none when unset; see the comment at the top). */
+        setenv("DM_PRESENT_HZ", "60", 1);   // the 30 fps presets' present base, as before the frame-rate setting was removed
 
         NSArray<NSScreen *> *all = NSScreen.screens; NSUInteger mi = [all indexOfObject:NSScreen.mainScreen];
         if (mi == NSNotFound) mi = 0;
@@ -352,7 +316,7 @@ int main(int argc, char **argv) {
                   work.UTF8String, image.stringByResolvingSymlinksInPath.UTF8String,
                   bundled ? cache.UTF8String : "next to the game binary (build/shader-cache)"); }
         fprintf(stderr, "[launcher] work %s, patches %s, present %s Hz, display %s, fullscreen %s, window %s, drawable scale %s, MetalFX %s, mod %s\n",
-                work.UTF8String, getenv("XCX_PATCHES"), getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
+                work.UTF8String, getenv("XCX_PATCHES") ?: "none", getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
                 getenv("TOTK_DRAWABLE_SCALE") ?: "1", getenv("TOTK_MFX_OUTPUT") ? "on" : "off", getenv("TOTK_ROMFS_MODS"));
         NSString *binary = [work stringByAppendingPathComponent:@"build/xcx-native"];
         char *const args[] = {(char *)binary.fileSystemRepresentation, "rewritten/v101", "boot", NULL};

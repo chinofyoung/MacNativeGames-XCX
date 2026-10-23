@@ -1,4 +1,5 @@
-/* Horizon services reached by the current TOTK startup. Unknown operations fail. */
+/* Horizon services reached by Xenoblade Chronicles X's startup (adapted from the original MacNativeGames TotK code).
+   Unknown operations fail. */
 #include "runtime.h"
 #include <TargetConditionals.h>
 #include "ipc.h"
@@ -57,7 +58,7 @@ static unsigned char alias_stale[ALIAS_SIZE_MAX/4096];
 static uint64_t alias_bytes;
 static uint8_t user_exception_context[0x1000] __attribute__((aligned(0x1000)));
 #define SYSTEM_RESOURCE_BUDGET (32ULL<<20)
-#define HEAP_CAP (4ULL<<30)   /* 1.4.3 sets a 2.2 GiB heap during nninitStartup */
+#define HEAP_CAP (4ULL<<30)   /* the cap of the original MacNativeGames TotK code (TotK 1.4.3 sets a 2.2 GiB heap during nninitStartup) */
 #define APP_POOL app_pool()
 static uint64_t app_pool(void){static uint64_t v;if(!v){const char *e=getenv("TOTK_APP_POOL");uint64_t extra=(runtime_output_res_extra_bytes()+0x1fffff)&~0x1fffffULL;
  v=e?strtoull(e,NULL,0):0xcd500000ULL+extra;if(!e&&extra)fprintf(stderr,"[totk] application pool %#llx: +%llu MiB for the true-2K texture heaps (TOTK_OUTPUT_RES)\n",(unsigned long long)v,(unsigned long long)(extra>>20));}return v;}
@@ -167,7 +168,8 @@ static uint64_t alias_map(int unmap,uint64_t addr,uint64_t size){
  if(addr<start||size>ALIAS_SIZE||addr-start>ALIAS_SIZE-size)return 0xdc01;
  pthread_mutex_lock(&memory_lock);unsigned first=(unsigned)((addr-start)/4096),count=(unsigned)(size/4096);
  /* Horizon MapPhysicalMemory maps only the pages of the range that are still unmapped and leaves mapped pages (and their
-    contents) untouched; TOTK's physical-memory heaps grow by re-mapping ranges that overlap what they already own. */
+    contents) untouched; games' physical-memory heaps (TotK's, where this was written) grow by re-mapping ranges that
+    overlap what they already own. */
  uint64_t fresh=0;if(!unmap)for(unsigned i=0;i<count;i++)if(!alias_pages[first+i])fresh+=4096;
  /* Physical-memory resource reservation failure is LimitReached (132), not
     InvalidCurrentMemory (106). The original SDK maps LimitReached to its
@@ -247,7 +249,8 @@ static uint32_t performance_configuration[2];
 static void performance_config(int mode,int cfg) {if(mode<0||mode>1)runtime_fail("invalid performance mode");performance_configuration[mode]=(uint32_t)cfg;fprintf(stderr,"[totk] performance request mode=%d cfg=%x: native macOS scheduling\n",mode,(uint32_t)cfg);}
 /* The game's language: TOTK_LANG as given (a Switch language code), otherwise from a locale: TOTK_LOCALE, which the
    launcher sets to the app's first preferred language (BCP 47, e.g. "pt-BR"; it follows a per-app language), or else
-   the Mac's current locale. Brazil maps to "pt-BR" only in the 1.4.3 build, whose RomFS has the official USpt text. */
+   the Mac's current locale. In the original MacNativeGames TotK code, Brazil maps to "pt-BR" only for TotK 1.4.3, whose
+   RomFS has the official USpt text. */
 uint64_t runtime_desired_language(void) {
  const char *explicit=getenv("TOTK_LANG");char code[8]={0};
  if(explicit){if(strlen(explicit)>7)runtime_fail("language code too long");memcpy(code,explicit,strlen(explicit));}

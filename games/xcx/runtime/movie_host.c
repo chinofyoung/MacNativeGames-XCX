@@ -1,6 +1,7 @@
 /* movie::Decoder for VP9 video on the host with libvpx.
-   TOTK's pre-rendered cutscenes (the .webm files in Event/Movie, 28 of them: VP9 profile 0, 1920x1080, 30 fps, video only) play through
-   the SDK movie library in subsdk0, which is Android's MediaCodec over NVIDIA's NvMM. Its video decoder opens Tegra's
+   Adapted from the original MacNativeGames TotK code (Xenoblade Chronicles X has 46 VP9 .webm movies). There, TotK's
+   pre-rendered cutscenes (the .webm files in Event/Movie, 28 of them: VP9 profile 0, 1920x1080, 30 fps, video only) play
+   through the SDK movie library in subsdk0, which is Android's MediaCodec over NVIDIA's NvMM. Its video decoder opens Tegra's
    NVDEC through nvdrv (NvMMLiteOpenVideo -> NvRmChannelOpen -> NvOsDrvOpen), which this port does not have, so the SDK
    aborted at the first cutscene (the blood moon at midnight).
    main imports the constructor and calls the 17 virtual methods through the vtable for movie::Decoder, whose slots are

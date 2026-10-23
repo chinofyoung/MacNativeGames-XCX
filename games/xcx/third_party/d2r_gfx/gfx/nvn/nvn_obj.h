@@ -173,7 +173,7 @@ int botw_dead_keep(uint64_t serial);
 #define BOTW_TEX_RELEASE_KEEP(k) if (!botw_dead_keep(k))
 void botw_dead_forget(const uint64_t *serials, size_t n);
 #define BOTW_DEAD_FORGET(s, n) botw_dead_forget((s), (n));
-/* Key 3 (MetalFX 2K): Breath of the Wild's own upscale of the finished 1600x900 picture into the 1920x1080 canvas is the
+/* MetalFX 2K (TotK and BotW's key 3; that key is not bound in this port): Breath of the Wild's own upscale of the finished 1600x900 picture into the 1920x1080 canvas is the
    fragment shader 0af88d51 (a 3-vertex triangle: five texel reads around the fragment's own coordinates, an edge-directed
    sharpening of the sampled colour; no dynamic resolution, so the valid region is the whole source). MetalFX replaces the
    whole draw (mfxup_dock; botw.md). */

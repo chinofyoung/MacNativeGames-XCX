@@ -4,6 +4,7 @@ experimentally, an unsigned iPhone / iPad IPA with --platform ios).
 
     python3 build_app.py <game.xci | base.nsp> -k <prod.keys> [--update <update.nsp>] [--firmware <folder>]
                          [-o <output .app | .ipa>] [--work <folder>] [--title-keys <title.keys>] [--platform macos|ios]
+                         [--delete-work]
 
 Supported: Xenoblade Chronicles X: Definitive Edition, base 0100453019AA8000 (v0) with update 1.0.1 0100453019AA8800
 (v65536), as
@@ -35,11 +36,14 @@ or, re-signed by a dump tool, once the code modules match; shared fonts by a ver
      once in its check-only mode so that macOS's first-run scan happens now and not at the player's first start.
 The Makefile in games/xcx stays the developer path (make prepare runtime app): this script runs the same targets.
 
-Every intermediate file is in the work folder (default: "<game file folder>/XCX_build"); a second run reuses what is
-already done and correct. The app needs no work folder once built and may be moved, also to /Applications. Saves, the
-shader cache, the RomFS check record and the log go to the user's Library (~/Library/Application Support/
-MacNativeGames/XCX, ~/Library/Logs/MacNativeGames/xcx.log), so the signed app stays read-only. Nothing from the game is
-in this repository; everything is made from your files on your Mac. Key values are never printed.
+Every intermediate file is in the work folder (default: XCX_build at the repository root, next to this script, wherever
+the game file is; the app goes next to the game file); a second run reuses what is already done and correct. The app
+needs no work folder once built and may be moved, also to /Applications. --delete-work deletes the work folder after
+a successful build (only a folder build_app.py made; never on a failure or a cancel), so a later build starts from
+scratch (about 8 minutes). Saves, the shader cache, the RomFS check
+record and the log go to the user's Library (~/Library/Application Support/MacNativeGames/XCX,
+~/Library/Logs/MacNativeGames/xcx.log), so the signed app stays read-only. Nothing from the game is in this repository;
+everything is made from your files on your Mac. Key values are never printed.
 
 Needs: macOS 26 or later on Apple silicon, the Xcode command line tools (Xcode for llvm-objdump), Homebrew with
     brew install opus libvpx python@3.14
@@ -95,7 +99,7 @@ OTHER_TITLES = {'0100F2C0115B6000': 'The Legend of Zelda: Tears of the Kingdom',
                 '01007EF00011E000': 'The Legend of Zelda: Breath of the Wild', '01004A4010FEA000': 'Bayonetta 3',
                 '0100E95004038000': 'Xenoblade Chronicles 2', '0100FF500E34A000': 'Xenoblade Chronicles: Definitive Edition',
                 '010074F013262000': 'Xenoblade Chronicles 3'}
-WORK_NAME = 'XCX_build'
+WORK_NAME = 'XCX_build'                          # the default work folder: <repository root>/XCX_build
 SPIRV_CROSS_COMMIT = 'aa217aeb6c9f0ace7a0ab233b28807edf45eb165'   # the Makefile's SPIRV_CROSS_COMMIT
 # The Python packages of the build: games/xcx/requirements.txt, plus unicorn for the rewrite's semantic check (equiv.py)
 EXTRA_PACKAGES = ['unicorn==2.1.4']
@@ -431,6 +435,91 @@ def free_gb(path):
     return shutil.disk_usage(existing(path)).free / GB
 
 
+def is_within(path, folder):
+    """True when path is folder or inside it."""
+    try:
+        path.relative_to(folder)
+        return True
+    except ValueError:
+        return False
+
+
+def work_markers(work):
+    """The files every finished build_app.py run leaves in its work folder: the step times and the ExeFS manifest."""
+    return [work / 'logs/build-times.json', work / f'extracted/{VERSION}/extraction-manifest.json']
+
+
+def delete_work_refusal(work, out, inputs, finished):
+    """Why --delete-work must not delete `work` (None: it may). Never the repository root, personal/, the home folder,
+    a folder that holds the output, an input file or files tracked by git; and only a work folder build_app.py made:
+    finished, both markers (after the build); before it, an existing non-empty folder must hold at least one of them
+    (or the build's venv stamp), so a folder of other files is refused before anything runs."""
+    work = work.resolve()
+    home = Path.home().resolve()
+    named = [(REPO, 'the repository root'), (REPO / 'personal', 'personal/'), (home, 'the home folder'),
+             (out.resolve(), 'the output'),
+             *((p.resolve(), 'an input file or folder') for p in inputs if p is not None)]
+    for path, what in named:
+        if is_within(path, work):
+            return f'{work} is or holds {what}'
+    if is_within(work, REPO):
+        tracked = subprocess.run(['git', '-C', REPO, 'ls-files', '--', work.relative_to(REPO).as_posix() or '.'],
+                                 capture_output=True, text=True)
+        if tracked.returncode or tracked.stdout.strip():
+            return f'{work} holds files of the repository (git ls-files)'
+    markers = work_markers(work)
+    if finished:
+        missing = [str(m.relative_to(work)) for m in markers if not m.is_file()]
+        if missing:
+            return f'{work} is not a build_app.py work folder (no {", ".join(missing)})'
+    elif work.exists() and any(work.iterdir()) and not any(m.is_file() for m in markers + [work / 'venv/xcx-packages.json']):
+        return (f'{work} is not a build_app.py work folder: it already holds files but none of the markers a build leaves '
+                f'({", ".join(str(m.relative_to(work)) for m in markers)})')
+    return None
+
+
+def folder_bytes(path):
+    """The bytes a folder's files take on disk (allocated blocks), each file counted once."""
+    seen, total = set(), 0
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                st = os.lstat(os.path.join(root, name))
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) not in seen:
+                seen.add((st.st_dev, st.st_ino))
+                total += st.st_blocks * 512
+    return total
+
+
+def delete_work(work, out, inputs, platform_name):
+    """--delete-work, after the build and its final check passed: remove the work folder (checked again first)."""
+    with timed('delete work folder', record=False) as t:
+        reason = delete_work_refusal(work, out, inputs, finished=True)
+        if reason:
+            raise BuildError(f'--delete-work: not deleting it: {reason}. The {"IPA" if platform_name == "ios" else "app"} '
+                             f'is built: {out}')
+        size = folder_bytes(work)
+        free_before = shutil.disk_usage(existing(work)).free
+        say(f'deleting the work folder {work} ({size / GB:.1f} GB of files; --delete-work)')
+        if platform_name == 'ios':
+            say('   it holds the game data the IPA is installed with (extracted/v101/romfs/romfs.bin, install_device.py '
+                '--game-data): a new build makes it again')
+        with critical():   # a cancel now waits until the folder is gone, never half a folder
+            remove_tree(work)
+            link = make_safe_link(work)
+            if link.is_symlink():
+                link.unlink()
+        freed = shutil.disk_usage(existing(work)).free - free_before
+        say(f'deleted the work folder: its files took {size / GB:.1f} GB; {max(freed, 0) / GB:.1f} GB of free space came '
+            'back now. Files it shared as APFS clones keep their space until the other copy goes too: the app\'s game '
+            'data (about 14 GB) come back only once the app is deleted too. A rebuild or update starts from scratch '
+            '(about 8 minutes).')
+        emit('work-deleted', work=str(work), bytes=size, freed_bytes=max(freed, 0))
+        t['built'] = True
+
+
 def file_stamp(path):
     st = path.stat()
     return [st.st_size, st.st_mtime_ns]
@@ -552,11 +641,15 @@ def prerequisites():
     return detail   # req_python's: the Python for the build's venv
 
 
+def make_safe_link(work):
+    return Path.home() / f'Library/Caches/MacNativeGames/xcx-work-{hashlib.sha256(str(work).encode()).hexdigest()[:12]}'
+
+
 def make_safe(work):
     """make splits paths at spaces: a work folder whose path has one is passed to make through a link without any."""
     if not any(c in str(work) for c in ' #$:=%\\\'"'):
         return work
-    link = Path.home() / f'Library/Caches/MacNativeGames/xcx-work-{hashlib.sha256(str(work).encode()).hexdigest()[:12]}'
+    link = make_safe_link(work)
     link.parent.mkdir(parents=True, exist_ok=True)
     if link.is_symlink() and link.resolve() == work.resolve():
         return link
@@ -1189,10 +1282,15 @@ def parse_args(argv):
     ap.add_argument('--title-keys', type=Path, help='your title.keys, for NSPs without a common ticket')
     ap.add_argument('-o', '--out', type=Path, help=f'the app or IPA to write (default: "<game file folder>/{APP_NAME}.app", '
                                                    f'or .ipa with --platform ios)')
-    ap.add_argument('--work', type=Path, help=f'work folder (default: {WORK_NAME} next to the game file)')
+    ap.add_argument('--work', type=Path, help=f'work folder (default: {WORK_NAME} at the repository root, next to build_app.py)')
     ap.add_argument('--platform', choices=('macos', 'ios'), default='macos',
                     help='macos (default), or ios: an unsigned iPhone / iPad IPA for sideloading (EXPERIMENTAL: most of '
                          'the picture is missing until shaders are translated ahead of time)')
+    ap.add_argument('--delete-work', action='store_true',
+                    help='delete the work folder once the app (or IPA) is built and its final check passed (only a work '
+                         'folder build_app.py made; never on a failure or a cancel). A later build starts from scratch '
+                         '(about 8 minutes); the app\'s game data are APFS clones, so their space returns only when the '
+                         'app is deleted too')
     ap.add_argument('--ios-seed-cache', type=Path, action='append',
                     help='iOS: another Mac shader cache folder whose translated variants the IPA carries (read only); repeatable')
     add_window_options(ap)
@@ -1282,7 +1380,8 @@ def main(argv):
     if mode.check_requirements:
         return 0 if check_requirements(mode.platform) else 1
     args = parse_args(argv)
-    emit('plan', platform=args.platform, steps=STEPS + PACKAGE_STEPS[args.platform])
+    emit('plan', platform=args.platform,
+         steps=STEPS + PACKAGE_STEPS[args.platform] + (['delete work folder'] if args.delete_work else []))
     with timed('inputs', record=False) as t:
         t['built'] = 'checked'
         plat, out, work, kind = check_inputs(args)
@@ -1317,11 +1416,19 @@ def check_inputs(args):
     out = args.out.expanduser().resolve() if args.out else args.game.parent / f'{APP_NAME}{plat["output_suffix"]}'
     if out.suffix != plat['output_suffix']:
         raise BuildError(f'the {args.platform} output must end in {plat["output_suffix"]}: {out}')
-    work = args.work.expanduser().resolve() if args.work else args.game.parent / WORK_NAME
+    work = args.work.expanduser().resolve() if args.work else REPO / WORK_NAME
     fonts_cached = (work / 'extracted/firmware/shared-fonts/manifest.json').is_file()
     if kind == 'nsp' and not args.firmware and not fonts_cached:
         raise BuildError('NSPs do not carry the system shared fonts: pass --firmware <folder of your firmware\'s NCA files>')
+    if args.delete_work:
+        reason = delete_work_refusal(work, out, work_inputs(args), finished=False)
+        if reason:
+            raise BuildError(f'--delete-work: {reason}; nothing was built. Choose another --work, or build without --delete-work')
     return plat, out, work, kind
+
+
+def work_inputs(args):
+    return [args.game, args.keys, args.update, args.title_keys, args.firmware]
 
 
 def requirements(args, plat, out, work):
@@ -1363,6 +1470,8 @@ def build_all(args, plat, out, work, logs, t0):
         step_ipa(work, out, logs, args)
         total = time.time() - t0
         say_times(work, total)
+        if args.delete_work:
+            delete_work(work, out, work_inputs(args), 'ios')
         say(f'done in {total / 60:.1f} min: {out}')
         emit('done', platform='ios', out=str(out), work=str(work), seconds=round(total, 1))
         say(IOS_EXPERIMENTAL)
@@ -1375,6 +1484,8 @@ def build_all(args, plat, out, work, logs, t0):
     plat['package'](work, out, logs)
     total = time.time() - t0
     say_times(work, total)
+    if args.delete_work:
+        delete_work(work, out, work_inputs(args), 'macos')
     say(f'done in {total / 60:.1f} min: {out}')
     emit('done', platform='macos', out=str(out), work=str(work), seconds=round(total, 1))
     say('Open it from Finder (it may be moved, also to /Applications). Saves, the shader cache and the log go to '

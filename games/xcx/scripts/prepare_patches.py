@@ -46,7 +46,7 @@ def parse(path, build_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mods', type=Path, nargs='?', default=HERE / 'mods/1.0.1', help='folder of <name>/exefs/*.pchtxt')
-    parser.add_argument('--work', type=Path, default=HERE / 'XCX_build')
+    parser.add_argument('--work', type=Path, default=HERE.parents[1] / 'XCX_build')   # <repository root>/XCX_build
     args = parser.parse_args()
     work = args.work.resolve()
     original = nsoimg.load(work / 'extracted/v101/exefs/main')

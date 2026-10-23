@@ -1,7 +1,6 @@
 /* Native keyboard and macOS gamepad backed full-key controller. State ABI follows libnx HID. */
 #include "runtime.h"
 #include "autoload.h"
-#include "world_survey.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +19,6 @@ static uint64_t button(unsigned code){switch(code){case 38:return 1;case 40:case
    save is a copy, its scripted measurement is void, and its script must not close the game under the user
    (2026-10-15: the user played 12 minutes in a test window and the script closed it at its time limit). */
 static void user_input(const char *what){
- runtime_survey_cancel_user();
  runtime_autoload_user_input();
  static _Atomic uint64_t last;uint64_t now=runtime_now_ns(),prev=atomic_load(&last);
  if(prev&&now-prev<60000000000ull)return;if(!atomic_compare_exchange_strong(&last,&prev,now))return;
@@ -29,14 +27,13 @@ static void user_input(const char *what){
 }
 /* Keys from the window are the user's; scripted and auto-load presses use the synthetic entry.
    Key 1 toggles the shortcut reminder in frontend.m. Key 2 (Mac key code 19) cycles MetalFX frame interpolation:
-   off -> 30+30 -> half the refresh rate -> uncapped (totk_mfx.m). Key 3 (key code 20) cycles 2K modes:
-   MetalFX 2K -> native 2K -> off (runtime_output_mode_cycle). Held-key repeats do not cycle. */
-enum { KEY_INTERP_TOGGLE = 19, KEY_OUTPUT_MODE_CYCLE = 20, KEY_ASPECT_TOGGLE = 21 };   /* 21: key 4, ultrawide on / off (aspect_patch.h) */
+   off -> 30+30 -> half the refresh rate -> uncapped (totk_mfx.m). Held-key repeats do not cycle. Keys 3 and 4 (TotK's
+   2K picture modes and ultrawide toggle) are not bound: this runtime has neither (their hooks were stubs). */
+enum { KEY_INTERP_TOGGLE = 19 };
 void runtime_input_key_synthetic(unsigned code,int down){if(code>=128)return;pthread_mutex_lock(&inputLock);int press=down&&!keys[code];if(down&&!keys[code])pending|=button(code);keys[code]=(unsigned char)!!down;pthread_mutex_unlock(&inputLock);
  if(press&&code==18){extern void runtime_shortcut_help_toggle(void);runtime_shortcut_help_toggle();}
  if(press&&code==KEY_INTERP_TOGGLE){extern void dm_gfx_set_flag(const char *name,int v);dm_gfx_set_flag("mfx_interp",-1);}
- if(press&&code==KEY_OUTPUT_MODE_CYCLE)runtime_output_mode_cycle();
- if(press&&code==KEY_ASPECT_TOGGLE)runtime_aspect_toggle();}
+}
 void runtime_input_key(unsigned code,int down){if(down&&code<128)user_input("keyboard");runtime_input_key_synthetic(code,down);}
 void runtime_input_clear(void){pthread_mutex_lock(&inputLock);memset(keys,0,sizeof(keys));pending=0;pthread_mutex_unlock(&inputLock);runtime_gamepad_clear();}
 static void initialize(void){pthread_mutex_lock(&inputLock);enabled=true;pthread_mutex_unlock(&inputLock);fprintf(stderr,"[totk] native keyboard controller initialized\n");}
@@ -155,7 +152,6 @@ static void *input_file(void *arg) {
     char line[1200];
     for (;;) {
         if (!fgets(line, sizeof line, f)) { if (ferror(f)) runtime_fail("diagnostic input read"); clearerr(f); usleep(100000); continue; }
-        if (runtime_survey_command(line)) continue;
         unsigned code, ms; int used = 0;
         if (sscanf(line, "down %u %n", &code, &used) == 1 && used && !line[used] && code < 128) {
             fprintf(stderr,"[totk-input] file: key %u down\n",code);runtime_input_key_synthetic(code,1);

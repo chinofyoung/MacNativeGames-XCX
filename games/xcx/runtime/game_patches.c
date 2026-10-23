@@ -9,7 +9,8 @@
    applied to main after relocation and before its text is sealed. scripts/prepare_patches.py turns each .pchtxt into patches/<slug>.tsv ("offset new orig",
    hex), already checked against the original image and the rewrite; here every site is checked again against the loaded
    bytes, and a mismatch stops the start (a wrong version or a rewritten word must never be patched).
-   XCX_PATCHES=<slug>,<slug>,... picks them (the launcher sets it from the settings; unset or empty: none). */
+   XCX_PATCHES=<slug>,<slug>,... picks them (from the environment: the launcher passes it on as it is; unset or empty:
+   none). */
 static int hexbytes(const char *s, uint8_t *out, size_t cap, size_t *n) {
     size_t k = 0;
     for (; s[0] && s[1] && s[0] != '\t' && s[0] != '\n'; s += 2) {
@@ -47,13 +48,10 @@ void runtime_game_patches(Module *main_module) {
     }
 }
 
-/* The TotK host hooks the shared graphics layer and the input keys call keep their names and answer "off". */
+/* The TotK host hooks the shared graphics layer and the runtime call keep their names and answer "off" (this port has
+   no output-size or aspect patches). */
 void runtime_frame_step_pin(double ms) { (void)ms; }
 void runtime_frame_step_update(uint64_t now_ns) { (void)now_ns; }
 int runtime_output_res(unsigned *w, unsigned *h) { (void)w; (void)h; return 0; }
 uint64_t runtime_output_res_extra_bytes(void) { return 0; }
-uint64_t runtime_output_size_current(void) { return (uint64_t)1080 << 32 | 1920; }
-int runtime_output_res_toggle(void) { return 0; }
-int runtime_output_mode_cycle(void) { return 0; }
-int runtime_aspect_toggle(void) { return 0; }
 float runtime_aspect_now(void) { return 0; }

@@ -1,6 +1,6 @@
 // The builder's state: the chosen files (remembered in UserDefaults), the requirement check, and the build, which is
 // build_app.py run with --progress json. Its stdout carries one JSON event a line (plan, step, start, done, error,
-// cancelled; requirement and requirements for --check-requirements), its stderr the human log. Only paths are passed
+// cancelled, work-deleted; requirement and requirements for --check-requirements), its stderr the human log. Only paths are passed
 // to it; key files are never read here, and build_app.py never prints key values.
 import AppKit
 import Foundation
@@ -81,6 +81,12 @@ final class BuildModel: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var log = ""
     @Published var legalAccepted = UserDefaults.standard.bool(forKey: "legalAccepted")
+    /// --delete-work: remove the work folder after a successful build (off by default, remembered).
+    @Published var deleteWork = UserDefaults.standard.bool(forKey: "deleteWork") {
+        didSet { if persist && deleteWork != oldValue { UserDefaults.standard.set(deleteWork, forKey: "deleteWork") } }
+    }
+    /// The last build deleted its work folder (the work-deleted event).
+    @Published private(set) var workDeleted = false
 
     private var process: Process?
     private var checkProcess: Process?
@@ -124,7 +130,10 @@ final class BuildModel: ObservableObject {
         paths[.game]?.deletingLastPathComponent().appendingPathComponent(appName + platform.suffix)
     }
     var output: URL? { paths[.output] ?? defaultOutput }
-    var defaultWork: URL? { paths[.game]?.deletingLastPathComponent().appendingPathComponent("XCX_build") }
+    /// build_app.py's default: XCX_build in the folder that holds build_app.py (the repository root), whatever the game file.
+    var defaultWork: URL? {
+        launch.script.map { URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("XCX_build") }
+    }
 
     /// What has to be chosen before a build can start.
     var missing: [String] {
@@ -199,6 +208,7 @@ final class BuildModel: ObservableObject {
         if let url = paths[.titleKeys] { args += ["--title-keys", url.path] }
         if let url = paths[.work] { args += ["--work", url.path] }
         args += ["-o", output.path, "--platform", platform.rawValue, "--progress", "json"]
+        if deleteWork { args.append("--delete-work") }
         return args
     }
 
@@ -206,6 +216,7 @@ final class BuildModel: ObservableObject {
         guard canBuild, let python = launch.python, let args = arguments() else { return }
         steps = []
         log = ""
+        workDeleted = false
         lastErrorLines = []
         stdoutBuffer = Data()
         stderrBuffer = Data()
@@ -301,6 +312,8 @@ final class BuildModel: ObservableObject {
             let i = steps.firstIndex { $0.id == name }!
             steps[i].status = status
             if status == .running { steps[i].started = Date() } else { steps[i].seconds = event["seconds"] as? Double }
+        case "work-deleted":
+            workDeleted = true
         case "done":
             setPhase(.done(out: event["out"] as? String ?? output?.path ?? ""))
         case "error":

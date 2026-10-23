@@ -613,35 +613,6 @@ NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 static void guest_chain(const char *what);
 static uint64_t g_frame;   // tentative; defined with the frame bookkeeping below
 static uint64_t g_game_sys;
-extern _Atomic int runtime_survey_pending;
-extern void runtime_survey_tick(uint64_t frame);
-extern const int32_t runtime_survey_sync[2];
-/* TOTK_SURVEY_DEBUG=1: while a command is pending, the first 6 waited syncs, their thread and guest call chain, and where the
-   system object holds them (pointer at sys+o, or inside / pointed to from the object at *(sys+o)). */
-static int vm_read8(uint64_t a, uint64_t *out);
-static void survey_wait_debug(const NVNsync *s) {
-    static int on = -1; static _Atomic int left = 6;
-    if (on < 0) { const char *e = getenv("TOTK_SURVEY_DEBUG"); on = e && !strcmp(e, "1"); }
-    if (!on || atomic_fetch_sub(&left, 1) <= 0) return;
-    uint64_t sv = (uintptr_t)s, tid = 0; pthread_threadid_np(NULL, &tid);
-    LOG("[survey] wait sync=%p frame=%llu thread=%llu", (const void *)s, (unsigned long long)g_frame, (unsigned long long)tid);
-    for (uint64_t o = 0; g_game_sys && o < 0x800; o += 8) {
-        uint64_t q;
-        if (!vm_read8(g_game_sys + o, &q) || !q) continue;
-        if (q == sv) LOG("[survey]   = *(sys+%#llx)", (unsigned long long)o);
-        if (sv >= q && sv - q < 0x800) LOG("[survey]   = *(sys+%#llx)+%#llx", (unsigned long long)o, (unsigned long long)(sv - q));
-        for (uint64_t o2 = 0; o2 < 0x800; o2 += 8) { uint64_t r; if (vm_read8(q + o2, &r) && r == sv) LOG("[survey]   = *(*(sys+%#llx)+%#llx)", (unsigned long long)o, (unsigned long long)o2); }
-    }
-    guest_chain("survey wait");
-}
-static void survey_after_wait(const NVNsync *s) {
-    if (__builtin_expect(atomic_load_explicit(&runtime_survey_pending, memory_order_relaxed), 0)) {
-        survey_wait_debug(s);
-        uintptr_t at = g_game_sys ? *(const uintptr_t *)(uintptr_t)(g_game_sys + runtime_survey_sync[0]) : 0;
-        if (at && runtime_survey_sync[1] >= 0) at = *(const uintptr_t *)(at + runtime_survey_sync[1]);
-        if (at && (uintptr_t)s == at) runtime_survey_tick(g_frame);
-    }
-}
 /* TOTK_SYNC_CHAIN=<n>[:<from frame>] */
 static int sync_chain_left(int k) {
     static int lim = -2; static uint64_t from; static _Atomic int used[2];
@@ -673,14 +644,13 @@ NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     int k = (o->fenced & 2) != 0, lg = synclog_env();
     if (lg) { atomic_fetch_add(&g_sw_calls[k], 1); if (o->fence == mtl_last_fence()) atomic_fetch_add(&g_sw_newest[k], 1); }
     int tok = (o->fenced & 4) != 0;
-    if (tok ? fence_wait(o->fence, 0) : mtl_wait(o->fence, 0)) { survey_after_wait(s); return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED; }
+    if (tok ? fence_wait(o->fence, 0) : mtl_wait(o->fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
     uint64_t t0 = lg ? now_ns() : 0;
     totk_tl(TL_WAIT_IN, o->fence, o->fence == mtl_last_fence());
     if (sync_chain_left(1)) { char w[96]; snprintf(w, sizeof w, "SyncWait sync=%p fence=%llu newest=%d", (const void *)s, (unsigned long long)o->fence, o->fence == mtl_last_fence()); guest_chain(w); }
     int ok = tok ? fence_wait(o->fence, timeout) : mtl_wait(o->fence, timeout);
     totk_tl(TL_WAIT_OUT, o->fence, ok);
     if (lg) { atomic_fetch_add(&g_sw_blocked[k], 1); atomic_fetch_add(&g_sw_ns[k], now_ns() - t0); }
-    if (ok) survey_after_wait(s);
     return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }

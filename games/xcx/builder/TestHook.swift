@@ -2,6 +2,7 @@
 // have). Used only when XCX_BUILDER_TEST_GAME or _COMMANDS is set (build_app.py --gui passes XCX_BUILDER_TEST_* on):
 //   XCX_BUILDER_TEST_GAME, _UPDATE, _FIRMWARE, _KEYS, _TITLE_KEYS, _OUT, _WORK  the fields (paths)
 //   XCX_BUILDER_TEST_PLATFORM      macos | ios
+//   XCX_BUILDER_TEST_DELETE_WORK=1 turn on "Delete the work folder when the build finishes" for this run only
 //   XCX_BUILDER_TEST_BUILD=1       accept the notice for this run only and start the build once the check passes
 //   XCX_BUILDER_TEST_CANCEL_AT=<step name>  press Cancel when that step starts
 //   XCX_BUILDER_TEST_STATUS=<file> write the window's state as JSON (window number, phase, steps) on every change
@@ -30,6 +31,7 @@ enum TestHook {
         model.setFromEnvironment(.titleKeys, env["XCX_BUILDER_TEST_TITLE_KEYS"])
         model.setFromEnvironment(.output, env["XCX_BUILDER_TEST_OUT"])
         model.setFromEnvironment(.work, env["XCX_BUILDER_TEST_WORK"])
+        model.deleteWork = env["XCX_BUILDER_TEST_DELETE_WORK"] == "1"
         let statusPath = env["XCX_BUILDER_TEST_STATUS"]
         let cancelAt = env["XCX_BUILDER_TEST_CANCEL_AT"]
         var started = false, cancelled = false
@@ -133,6 +135,8 @@ enum TestHook {
             "window": NSApp.windows.first(where: { $0.isVisible })?.windowNumber ?? 0,
             "requirements": "\(model.requirementsState)",
             "canBuild": model.canBuild,
+            "deleteWork": model.deleteWork,
+            "workDeleted": model.workDeleted,
             "status": phase,
             "steps": model.steps.map {
                 ["step": $0.id, "status": $0.status.rawValue, "seconds": $0.seconds.map { $0 as Any } ?? NSNull()]

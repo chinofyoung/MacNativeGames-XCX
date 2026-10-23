@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Read an XCI or NSP in place; extract and verify its base or explicitly selected update Program ExeFS.
+"""Library for reading an XCI or NSP in place: container and partition tables, prod.keys / title.keys, common tickets,
+NCA3 headers and their key-area or common-ticket AES-CTR keys (merge_romfs.py, extract_code.py, identify_game.py,
+extract_shared_fonts.py and extract_app_icon.py use it).
 
-Supports NCA3, key-area or common-ticket AES-CTR, and hierarchical SHA-256 PFS0.
-Keys stay in memory. No RomFS extraction, executable launch, or network calls.
+Adapted from the original MacNativeGames TotK scripts; its TotK-only command line (one base Program of TotK's title)
+was removed: this port's ExeFS comes from extract_code.py. Keys stay in memory and are never printed.
 """
-import argparse
-import hashlib
-import json
 import struct
-import io
-from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
@@ -178,96 +175,3 @@ def nca_inventory(f, entries, keys):
                       title_id=f'{struct.unpack_from("<Q", hdr, 0x210)[0]:016X}')
         records.append((record, hdr))
     return records
-
-
-def program_nca(records, update=False):
-    if update:
-        programs = [(r, h) for r, h in records if r["content_type"] == 0]
-        require(len(programs) == 1, "Expected one update Program NCA; combined packages are unsupported")
-        record, hdr = programs[0]
-        require(record["title_id"] == "0100F2C0115B6000", "Update belongs to another game")
-        require(any(hdr[0x400 + i*512 + 4] == 4 for i in range(4)), "Expected a BKTR update, not a base game")
-        require(all(r["title_id"] in ("0100F2C0115B6000", "0100F2C0115B6800") for r, _ in records), "Mixed-title update package")
-        return record, hdr
-    # Update Program NCAs can retain the base title ID; their Meta NCA carries the update ID.
-    metadata = [r for r, _ in records if r['content_type'] == 1]
-    require(len(metadata) <= 1 and all(r['title_id'] == '0100F2C0115B6000' for r in metadata),
-            'Expected base game metadata; updates, DLC and combined packages are unsupported')
-    programs = [(r, h) for r, h in records if r['content_type'] == 0]
-    require(len(programs) == 1, 'Expected one base Program NCA; updates, DLC and combined packages are unsupported')
-    record, hdr = programs[0]
-    require(record['title_id'] == '0100F2C0115B6000',
-            'Expected Tears of the Kingdom base game 1.0.0; updates, DLC and other games are unsupported')
-    return record, hdr
-
-
-def record_offset(record):
-    # Read manifests produced before NSP support too.
-    return record['nca_offset'] if 'nca_offset' in record else record['xci_offset']
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('game', type=Path, help='base game 1.0.0 (.xci or .nsp)')
-    parser.add_argument('--keys', required=True, type=Path)
-    parser.add_argument('--update', action='store_true', help='extract update code; caller must verify supported version hashes')
-    parser.add_argument('--output', required=True, type=Path)
-    args = parser.parse_args()
-    require(not args.output.exists(), 'Output already exists; choose a new directory')
-    keys = load_keys(args.keys)
-    with args.game.open('rb') as f:
-        kind, entries = container_entries(f, args.game.stat().st_size)
-        tickets = common_tickets(f, entries)
-        records = nca_inventory(f, entries, keys)
-        record, hdr = program_nca(records, update=args.update)
-        ctr_key = nca_ctr_key(hdr, keys, tickets)
-        for i in range(4):
-            start, end = struct.unpack_from('<II', hdr, 0x240 + 16 * i)
-            if not start:
-                continue
-            fs = hdr[0x400 + 512 * i:0x600 + 512 * i]
-            require(hashlib.sha256(fs).digest() == hdr[0x280 + 32 * i:0x2A0 + 32 * i], 'FS header hash mismatch')
-            if fs[2:4] != b'\x01\x02':
-                continue
-            require(fs[4] == 3, 'Only AES-CTR ExeFS is supported')
-            blocksize, levels = struct.unpack_from('<II', fs, 0x28)
-            hashoff, hashsize, pfsoff, pfssize = struct.unpack_from('<QQQQ', fs, 0x30)
-            secstart, secsize = start * 512, (end - start) * 512
-            require(levels == 2 and blocksize > 0 and pfssize <= 512 * 1024 * 1024, 'Unsupported ExeFS hash layout')
-
-            def section_read(relative, size):
-                require(relative >= 0 and relative + size <= secsize, 'Section read out of bounds')
-                absolute = secstart + relative
-                aligned = absolute & ~15
-                iv = fs[0x140:0x148][::-1] + (aligned // 16).to_bytes(8, 'big')
-                data = read_at(f, record_offset(record) + aligned, size + absolute - aligned)
-                return decrypt(ctr_key, modes.CTR(iv), data)[absolute - aligned:]
-
-            hashes = section_read(hashoff, hashsize)
-            require(hashlib.sha256(hashes).digest() == fs[8:40], 'ExeFS hash-table mismatch')
-            pfs = section_read(pfsoff, pfssize)
-            for index, pos in enumerate(range(0, pfssize, blocksize)):
-                expected = hashes[index * 32:(index + 1) * 32]
-                require(hashlib.sha256(pfs[pos:pos + blocksize]).digest() == expected,
-                        f'ExeFS block hash mismatch: {index}')
-            files = [(name, pfs[off:off + size]) for name, off, size in
-                     partition_entries(io.BytesIO(pfs), 0, len(pfs))]
-            require(any(name == 'main.npdm' for name, _ in files), 'PFS0 is not ExeFS')
-            args.output.mkdir(parents=True)
-            extracted = []
-            for name, data in files:
-                (args.output / name).write_bytes(data)
-                extracted.append({'name': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-            manifest = {'source': str(args.game.resolve()), 'source_size': args.game.stat().st_size,
-                        'source_mtime_ns': args.game.stat().st_mtime_ns, 'container': kind,
-                        'nca_inventory': [r for r, _ in records], 'program': record, 'section_index': i,
-                        'integrity': 'FS header, ExeFS hash table, and every ExeFS data block verified; RSA signatures not checked',
-                        'files': extracted}
-            (args.output.parent / 'extraction-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-            print(json.dumps({'integrity': manifest['integrity'], 'files': extracted}, indent=2))
-            return
-        raise ValueError('No ExeFS section found')
-
-
-if __name__ == '__main__':
-    main()

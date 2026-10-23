@@ -18,7 +18,8 @@ from `tools/totk_xlate` and the repository's `vendor/ryujinx` (see `prebuilt/mac
 How the work was done, what was found and what went wrong on the way: [CHANGELOG.md](CHANGELOG.md).
 
 You must own the game: use your own XCI and the `prod.keys` dumped from your own Switch. Nothing from the game is in
-this repository; `XCX_build/` (the work folder) and `mods/` are ignored by git.
+this repository; the work folder and `mods/` are ignored by git. There is one work folder, `XCX_build/` at the
+repository root: `build_app.py` (and its window) use it by default, and the commands below pass it as `WORK`.
 
 ## Inputs
 
@@ -35,8 +36,8 @@ this repository; `XCX_build/` (the work folder) and `mods/` are ignored by git.
 ## Stage 1 (done)
 
 From `games/xcx`, with a Python environment made from `requirements.txt` in this folder plus `unicorn` for `equiv.py`
-(`PY=<that python>`). The game file and keys are in `personal/` and the work folder is `XCX_build/`, both at the
-repository root (ignored by git); the commands pass the work folder as `WORK`:
+(`PY=<that python>`; `build_app.py` makes one in `XCX_build/venv`). The game file and keys are in `personal/` and the
+work folder is `XCX_build/`, both at the repository root (ignored by git); the commands pass the work folder as `WORK`:
 
 ```sh
 WORK=../../XCX_build
@@ -150,7 +151,9 @@ make install WORK=$WORK                                         # optional: a co
 ```
 
 Launch it like any Mac app: double-click `XCX_build/Xenoblade Chronicles X.app` in Finder (or `open` it). A
-settings window comes first; Play starts the game with the switches the terminal runs set by hand
+settings window comes first (presets, monitor, window or full screen, window size, output resolution, scaler, interface
+mod, FPS overlay; no frame-rate or internal-resolution setting, as no patch for them exists); Play starts the game with
+the switches the terminal runs set by hand
 (`TOTK_GPU_ALLOW_SUBMIT=1` and the rest), the game's own 30 fps, the compact HUD, MetalFX upscaling and frame
 interpolation off (key 2 still toggles interpolation; on an M1 it costs real frames). The development app does not hold
 the game: it runs `build/xcx-native` from the work folder it names in its Info.plist, so the work folder must stay
@@ -164,6 +167,9 @@ where it was when the app was built.
   RomFS image is). Commands for the running game (`shot <path>.png`, `close`, ...) can be appended to
   `~/Library/Application Support/MacNativeGames/XCX/input.txt`; `open --env XCX_PLAY=1 <app>` skips the settings window,
   and `--env TOTK_SLOT_OWNER=<name>` marks a scripted run so that a game the user starts takes the game slot over.
+- Player exefs patches (`make patches`: `mods/1.0.1/<name>/exefs/*.pchtxt` -> `$WORK/patches/<slug>.tsv`) have no
+  setting in the window: `open --env XCX_PATCHES=<slug>,<slug> <app>` passes them to the runtime
+  (`runtime/game_patches.c`), which checks every site before writing it. None are known for this game yet.
 
 Checked 2026-10-23: the title offers Continue and it loads the save into Primordia, with no shader translated and no
 pipeline built (`docs/screenshots/xcx-stage5-app-title.png`, `xcx-stage5-app-continue.png`; details in the changelog).
@@ -184,7 +190,8 @@ build").
 Stage 4 and 5 are in progress; the changelog's Status table is kept current. Not checked yet: listening to the audio,
 cities (New Los Angeles), Skells, cutscenes (the opening's White Whale is a black silhouette, not rechecked), day-time
 lighting, water, menus beyond character creation, and a New Game with the current build. Then: the rest of the online
-SDK's offline answers as the game reaches them, the 60 fps and resolution patches the settings window lists, a startup
+SDK's offline answers as the game reaches them, 60 fps and resolution patches (the settings window has no such
+setting until they exist), a startup
 shader seed with Metal cache warm-up for the app, and up-front shader translation, which the iPhone / iPad build needs
 to draw.
 

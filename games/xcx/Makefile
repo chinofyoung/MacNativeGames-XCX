@@ -7,13 +7,13 @@
 # (prepare, runtime, shader-tools, launcher, icon) with WORK=<its work folder> and then makes a self-contained app.
 # Inputs come from scripts/extract_code.py, scripts/merge_romfs.py and the rewrite (see README.md), then:
 #   make prepare   # scripts/prepare_runtime.py: tables, RomFS index, fonts config
-#   make runtime   # XCX_build/build/xcx-native
+#   make runtime   # <work>/build/xcx-native (default work folder: XCX_build at the repository root)
 #   make boot      # run it from the work folder (cwd: extracted/ and rewritten/ are read relative to it);
 #                  # TOTK_GPU_ALLOW_SUBMIT=1 for a picture, TOTK_HEADLESS=1 to stop where the game first needs a window
 #   make app       # <work>/Xenoblade Chronicles X.app: double-click it (the launcher sets the picture's switches itself);
 #                  # a development app that runs the game from the work folder
 
-WORK ?= XCX_build
+WORK ?= ../../XCX_build
 OUT := $(WORK)/build
 PY ?= python3
 NATIVE_OPT ?= -O2

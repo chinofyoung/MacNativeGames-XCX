@@ -127,7 +127,7 @@ def mk(image, arena0):
     def bad(uc, acc, addr, size, val, d): st['fault'] = (acc, addr); return False
     # Keep one code hook for the emulator's lifetime. Repeatedly adding/removing
     # hooks lets cached Unicorn translation blocks run past a new stop boundary
-    # (1.4.3 main+0x1590c); a fresh emulator does not reproduce that discrepancy.
+    # (TotK 1.4.3 main+0x1590c, in the original MacNativeGames TotK rewriter); a fresh emulator does not reproduce that discrepancy.
     def code(uc, address, size, data):
         callback = st.get('code_hook')
         if callback is not None: callback(uc, address, size, data)

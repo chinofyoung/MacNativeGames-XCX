@@ -1,7 +1,8 @@
 /* nn::codec hardware Opus decoder, implemented with libopus on the host (the hwopus service is a
    hardware-accelerated libopus). Input frames carry Nintendo's 8-byte big-endian header
    {payload size, final range}; the decoder's final range is checked against it. A header range of 0 is not a
-   recorded value: none of the 280,723 packets in 1.4.3's English voice streams has it, while a fan dub's encoder
+   recorded value: none of the 280,723 packets in TotK 1.4.3's English voice streams has it (measured for the original MacNativeGames TotK
+   code this is adapted from), while a fan dub's encoder
    writes 0 into every packet (all 186,758 of the PKG PT-BR dub, which decode without error). Those are not checked. */
 #include "runtime.h"
 #include <opus.h>

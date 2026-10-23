@@ -118,7 +118,8 @@ static void wake(thr_t *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke 
 // Suspend until woken or timed out (ns<0 infinite, 0 immediate timeout); returns wres or R_TIMEOUT
 static int64_t block_inner(thr_t *t, int kind, int64_t ns);
 // ---------- Virtual cores ----------
-// Horizon runs at most one thread per core, and TOTK keys per-core data (allocators, job queues) by
+// Horizon runs at most one thread per core, and games key per-core data (allocators, job queues; found in TotK, whose
+// code this is adapted from) by
 // GetCurrentCoreNumber without locks. Guest threads therefore hold one of the three application cores while they
 // run guest code; a core is given up only where Horizon would switch threads (waits, sleep, yield, exit, blocking
 // host services) and handed to the best waiting thread (lowest priority value, then first come). A thread that a
@@ -328,9 +329,10 @@ void dm_guest_clock_advanced(void) {
    a guest loop that polls and yields becomes a host busy spin (on the iPhone the system logged about 1,300 wake-ups a
    second for the game). A run of yields with no other SVC between them stays plain sched_yield for its first 2 ms:
    shorter waits are handoffs between working threads, such as the main thread waiting for its ModuleSystem workers on
-   the frame's critical path (nxnative started at 200 µs and 1.4.3 then dropped itself to 20 fps). After that each yield
+   the frame's critical path (measured on TotK in the original MacNativeGames code: nxnative started at 200 µs and TotK
+   1.4.3 then dropped itself to 20 fps). After that each yield
    sleeps an eighth of the run so far, 10 to 250 µs, with the virtual core given up, so a wait ends at most an eighth late.
-   Off by default: on the Mac at about 100 fps (1.2.1 field save, 300 s each) it saved 3% CPU (708 -> 685 s) but frames
+   Off by default: on the Mac at about 100 fps (TotK 1.2.1 field save, 300 s each) it saved 3% CPU (708 -> 685 s) but frames
    dropped steadily, 10-15 per 300 instead of 0-3. TOTK_YIELD_BACKOFF=on turns it on (250:2000); =<cap µs>[:<start µs>]
    sets the cap and the start. Returns the sleep for a yield whose run started run_ns ago, 0 for a plain yield. */
 static uint64_t yield_backoff_ns(uint64_t run_ns) {

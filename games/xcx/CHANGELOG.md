@@ -875,3 +875,107 @@ tree and nothing ready-made is shipped. A second `--gui` brings the open window 
 permission for UI scripting, and the hook sets the fields directly. No iOS build was run through the window (Xcode
 components were being downloaded). The builder has no app icon. Building into a new output folder means macOS scans
 that app once (about 2 minutes), as from the command line.
+
+### 2026-10-23: one work folder, `XCX_build/` at the repository root
+
+There were three local folders: the development work folder `XCX_build/` (its own 14 GB extraction, the development
+app, test scripts, logs and 958 MB of captures), `XCX_build_clean/` (the work folder of `build_app.py`) and
+`XCX_build_v200/` (the update 2.0.0 feasibility study). Now there is one, `XCX_build/` at the repository root, and it is
+the default work folder of `build_app.py` and of the build window, wherever the game file is. The app still goes next
+to the game file by default (`-o` chooses another place).
+
+- The old `XCX_build/`'s shader cache (`build/shader-cache/rt-totk-native-v4-unverified`, 8,383 files) was merged into
+  the self-contained app's per-user cache, same chain: 1,663 files copied, 6,720 already there with the same name and
+  kept (6,517 identical; the 203 that differ are 202 `.variants` indexes and `pso_collected.tsv`), so 7,261 files became
+  8,924. Its `user-data/pso_user.tsv` was not merged into the profile's: same format, but every one of its lines is
+  already in the profile's copy, which began as a copy of it.
+- The records worth keeping (`FEASIBILITY.md`, `tools/`, `analysis/`, `logs/`, `inventory.log`, the stage-0 JSON and
+  NVN / service lists, the two old save copies, the five captures this changelog names under `shots/stage4` and
+  `shots/stage5`, and `FEASIBILITY-v200.md`) went to the user's private files outside git; the rest of the old folder
+  was deleted (about 16 GB freed). The references to `XCX_build/shots/...`, `XCX_build/tools/...` and
+  `XCX_build/logs/...` in the entries above point to that old folder.
+- `XCX_build_clean/` was renamed `XCX_build/`, so the `XCX_build_clean/...` paths above now read `XCX_build/...`. The
+  2.0.0 study was folded into it: `rewritten/v200`, `extracted/v200/exefs` and `cache/verify_v200` where the build keeps
+  1.0.1's, the rest in `analysis/v200/`. `build_app.py` reads only the `v101` folders, so the `v200` ones are not
+  touched by a 1.0.1 build. `extracted/v200` has no `extraction-manifest.json`, so a future 2.0.0 step would extract
+  that ExeFS again (seconds).
+- Paths written into the renamed folder were pointed at the new name: the venv's `bin/` scripts and `pyvenv.cfg`, the
+  generated headers (`build/shared_fonts_config.h`, the iOS `Gen/` files and Xcode project, the iOS dependency build
+  trees) and the app stamp. The runtime was relinked because the fonts header changed.
+- `build_app.py --work` and the window's work folder default to `<repository root>/XCX_build` (was `XCX_build` next to
+  the game file). README, `games/xcx/README.md` and the help text say so.
+
+**Checked:** `python3 build_app.py "personal/<XCI>" -k personal/prod.keys -o "personal/Xenoblade Chronicles X.app"`
+without `--work`: every step reused except the runtime (relinked, 7.9 s) and the app (a new output: assembled and signed
+in 0.7 s, macOS's first check 118 s), 128 s in all. Run again, everything was reused (1.4 s). `codesign --verify
+--strict` passes, the app's `--check` reports 1.0.1, and its only link is the RomFS link inside the bundle. The window's
+sources compile. The ten files of the save profile have the same SHA-256 before and after. The game was not started.
+
+### 2026-10-23: tidy-up, `--delete-work`, and the end of the folder consolidation
+
+**Removed.** `scripts/make_res_patch.py` (Bayonetta 3 1.2.0's resolution patch maker), `gfx/nvn/names.txt`,
+`gfx/tex/README.zh-CN.md` (and its link), the `nsw/` line of the root `.gitignore`, and `runtime/world_survey.c` /
+`.h` (the TotK actor-survey stub; its calls in `input.c` and the sync-wait hook in `hle_nvn.c` went with it).
+
+**Launcher.** The 60 / 120 fps control, fixed 900p, Improved LOD and Remove Film Grain are gone from the settings
+window (the preset table, the rows, load / save, the missing-patch note and the launch code): they named exefs patches
+that do not exist for this game. `DM_PRESENT_HZ` is now always 60, which is what the "Original (30 fps, ...)" presets
+set before. `XCX_PATCHES` is no longer set by the launcher: a value from the environment
+(`open --env XCX_PATCHES=<slug>,... <app>`) reaches `runtime/game_patches.c` unchanged, so `make patches` /
+`prepare_patches.py` stays a working path for player patches. Settings keys older versions saved (`fps`, `fixed900`,
+`lod`, `nograin`) are no longer read; the launcher was started with all four set and opened normally.
+
+**Keys 3 and 4.** Key 4 (TotK's ultrawide toggle) called a stub that returned 0, so its binding, the stub and the
+declaration were removed; `runtime_aspect_now` stays (the graphics layer reads it, weakly) and answers 0. Key 3 was
+checked: it called `runtime_output_mode_cycle`, also a stub returning 0 (TotK's 2K picture modes need its output-size
+patch, which this port does not have), so it did nothing and was removed too, with the unused
+`runtime_output_size_current` / `runtime_output_res_toggle` stubs. MetalFX upscaling itself is unaffected: the
+launcher's scaler setting turns it on through `TOTK_MFX_UPSCALE` / `TOTK_MFX_OUTPUT`. The shortcut box lists keys 1
+and 2 only. Comments that pointed at the missing `aspect_patch.h` or at key 3 now say what holds in this port.
+
+**Scripts.** `extract_exefs.py` and `extract_romfs.py` lost their TotK-only command lines (TotK title checks,
+`program_nca`, `record_offset`) and are libraries now; every importer (`merge_romfs`, `identify_game`,
+`extract_shared_fonts`, `extract_app_icon`, `extract_code`, `romfs_control`) imports only what is left. The Makefile's
+`WORK` and the `--work` defaults of `prepare_runtime.py`, `prepare_patches.py` and `symbolize.py` are the root
+`XCX_build`. Provenance comments that read as if this were TotK or Bayonetta 3 (`1.4.3`, "the current TOTK startup",
+...) now say they come from the original MacNativeGames TotK code (Makefile, `merge_romfs.py`, `prepare_runtime.py`,
+`services.c`, `threads.c`, `opus_codec.c`, `movie_host.c`, `audio_out.c`, `nvn_mtl.m`'s title list, `patch_nso.py`,
+`equiv.py`); comments only, log strings unchanged.
+
+**`--delete-work`.** `build_app.py --delete-work` deletes the work folder after the app (or IPA) is built and its final
+check passed, never after a failure or a cancel (the deletion runs as a critical section, so a cancel arriving during
+it waits). It refuses, before anything is built, the repository root, `personal/`, the home folder, any folder holding
+the output, an input file or git-tracked files, and an existing non-empty folder with none of the build's markers; at
+the end both markers (`logs/build-times.json`, `extracted/v101/extraction-manifest.json`) must be there. It prints the
+files' size and the free space returned, notes that the app's APFS-cloned game data free their space only once the app
+is deleted too, emits a `work-deleted` JSON event, and removes the `make` link in `~/Library/Caches` for a work path with
+spaces. The builder window has a "Delete the work folder when the build finishes" toggle (off by default, remembered;
+`XCX_BUILDER_TEST_DELETE_WORK=1` in test mode).
+
+**Leftovers.** The older duplicate app `XCX_build/Xenoblade Chronicles X.app` (13 GB of APFS clones; the user plays
+`personal/`'s) was unregistered and deleted. `XCX_build/build/shader-cache/rt-totk-native-v4-unverified` (6,151 files)
+was merged into the per-user cache of the same chain, never overwriting: 6,149 files were already there and
+identical, none was missing, and two differed: one `.variants` index and `pso_collected.tsv`. First the per-user
+cache's 1,318 `.variants` and its `pso_collected.tsv` were copied to `XCX_build/analysis/cache-backup/`. The index got
+the union of both JSON arrays, deduplicated by variant (1 entry added, no conflicting entry), written in the graphics
+layer's own format (`totk_shader_rt.m`: compact `NSJSONSerialization` with sorted keys, which orders keys numerically:
+all 2,343 existing indexes (1,025 + 1,318) round-trip byte for byte through the merge's writer). `pso_collected.tsv` got the source's
+52 lines, none of which it had (334 -> 386 lines). Every index entry of the merged cache (1,319) has its `_b.metal`.
+The cache still holds 8,924 files.
+
+**Checked.** `make runtime launcher` builds clean with `-Werror` (the graphics layer recompiled: 21 objects, 14 s).
+`py_compile` passes on every changed script and the builder's sources compile with `xcrun swiftc`. Then
+`python3 build_app.py "personal/<XCI>" -k personal/prod.keys -o "personal/Xenoblade Chronicles X.app"`: the rewrite
+checks ran again (45.6 s, both pass; the checkers' digests changed with the comments in `patch_nso.py` and
+`equiv.py`), runtime and launcher were current from the `make` run, the app was assembled again (0.8 s) and checked
+(2.5 s), 50.3 s in all; `codesign --verify --strict` passes and `--check` reports 1.0.1. The app was opened with
+`XCX_PLAY=1` and scripted input: first frame after 12 s, Continue at 55 s, the field in Primordia at 110 s, closed at
+115 s; 0 【红】 / FATAL lines, no shader translated and 0 pipelines built (cache reused), the launcher line reads
+`patches none, present 60 Hz`, no `[input] user input`. The settings window could not be captured (no screen
+recording permission for `screencapture -l`); the launcher binary no longer holds any of the removed labels.
+`--delete-work` was tested on `XCX_build_deltest`, an APFS clone of `XCX_build` (`cp -cRp`, no space used): `--work
+personal`, `.`, `~`, `games/xcx`, `games`, `~/Documents` and an output inside the work folder are refused before the
+build; a build that failed (empty keys file, at identify) and one cancelled with SIGTERM during `prepare` left the
+folder in place; a full build into a scratch app (127 s, macOS's first check 118 s) deleted it (its files took 28.2 GB,
+all shared clones, so no space came back), and the scratch app still passed `codesign --verify --strict` and `--check`
+before it was deleted. The ten files of the save profile have the same SHA-256 before and after everything.

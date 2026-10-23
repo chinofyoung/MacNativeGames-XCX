@@ -86,8 +86,11 @@ The full work log, with what was found, what was changed and how each step was c
 ## Build and run
 
 The examples keep the XCI and `prod.keys` in `personal/` at the repository root, where git ignores them. Any other
-place works; keep game files, work folders and apps out of the repository's tracked files (`XCX_build/` and any
-`XCX_build_*/` at the root are ignored too).
+place works; keep game files, work folders and apps out of the repository's tracked files.
+
+There is one work folder, `XCX_build/` at the repository root (next to `build_app.py`, ignored by git). It is the
+default of `build_app.py`, of the window and of the developer commands below, wherever the game file is, so every build
+reuses the same steps. The app goes next to the game file unless `-o` says otherwise.
 
 ### The window (easiest)
 
@@ -102,8 +105,10 @@ This opens **Xenoblade Chronicles X Builder**, a small native window:
 - Choose your game file (the XCI, or a base NSP and then the 1.0.1 update NSP), your `prod.keys`, and optionally
   `title.keys` and a firmware folder.
 - The output defaults to `Xenoblade Chronicles X.app` next to the game file. Pick *iPhone and iPad (experimental)* to
-  build the IPA instead (see below). *Advanced* chooses another work folder.
+  build the IPA instead (see below). *Advanced* chooses another work folder than `XCX_build/` at the repository root.
 - The *Prerequisites* panel checks this Mac and lists anything missing, with the command that installs it.
+- *Delete the work folder when the build finishes* (off by default, remembered) runs the build with `--delete-work`
+  (see below): a rebuild or update then starts from scratch, about 8 minutes.
 - **Build App** shows each step with its time and the log. **Cancel** stops cleanly, and the next build continues from
   the last finished step. At the end, **Open App** or **Show in Finder**. If the build stops, the window names the step
   and the file.
@@ -121,8 +126,8 @@ From the repository root:
 python3 build_app.py "personal/Xenoblade Chronicles X Definitive Edition.xci" -k personal/prod.keys
 ```
 
-This makes the work folder `personal/XCX_build` and the app `personal/Xenoblade Chronicles X.app`; `--work <folder>`
-and `-o <path>.app` choose other places.
+This uses the work folder `XCX_build/` at the repository root and makes the app `personal/Xenoblade Chronicles X.app`
+(next to the game file); `--work <folder>` and `-o <path>.app` choose other places.
 
 For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.nsp> --firmware <firmware folder>`
 (add `--title-keys title.keys` for NSPs without a common ticket).
@@ -140,6 +145,12 @@ For NSPs: `python3 build_app.py <base.nsp> -k prod.keys --update <update 1.0.1.n
 - The app is **self-contained**: the code, fonts and game data are inside it (the 14.3 GB RomFS as APFS clones, so no
   extra space on the same volume), it is ad-hoc signed, and it can be moved, also to `/Applications`. The work folder
   can be deleted afterwards; keep it to rebuild in seconds.
+- `--delete-work` deletes the work folder once the app (or IPA) is built and its final check passed, never after a
+  failure or a cancel. It deletes only a folder `build_app.py` made (its `logs/build-times.json` and
+  `extracted/v101/extraction-manifest.json`), and never the repository root, `personal/`, your home folder, a folder
+  holding the output, an input file or tracked files; anything else is refused before the build starts. It prints what
+  it frees. The app's game data are APFS clones of the work folder's, so that space (about 14 GB) comes back only once
+  the app is deleted too. The next build or update starts from scratch (about 8 minutes).
 
 The shader translator comes ready-made (`games/xcx/prebuilt/macos-arm64/totk_xlate`, checked against its SHA-256), so
 the build needs no .NET. Its sources are in `games/xcx/tools/totk_xlate` and `vendor/ryujinx`; see
@@ -151,9 +162,10 @@ Double-click `Xenoblade Chronicles X.app` in Finder, or `open` it. A settings wi
 game.
 
 - The default preset is "Original (30 fps, window)"; "Original (30 fps, full screen)" is the other one. Both run the
-  game's own 30 fps without MetalFX upscaling.
-- The window also lists 60 / 120 fps and a fixed 900p resolution. Their code patches do not exist for this game yet,
-  and the window says so.
+  game's own 30 fps and dynamic resolution without MetalFX upscaling.
+- The window also chooses the monitor, window or full screen, the window size, the full-screen output resolution, the
+  scaler (MetalFX or plain), an interface mod and the FPS overlay. There is no frame-rate or internal-resolution
+  setting: the code patches they would need do not exist for this game.
 - The first start checks the whole RomFS once (the first frame takes about 10 s); later starts reuse that record.
 - Shaders are translated the first time the game meets them and kept in the shader cache, so the first minutes of a new
   install stutter more than later ones.
@@ -161,8 +173,8 @@ game.
 ### Developer build (make)
 
 `build_app.py` runs the targets of [`games/xcx/Makefile`](games/xcx/Makefile) (`prepare`, `runtime`, `shader-tools`,
-`launcher`, `icon`). For work on the port they can be run by hand, from `games/xcx`, after the extraction steps. A work
-folder made by `build_app.py` already holds everything up to `make prepare`.
+`launcher`, `icon`). For work on the port they can be run by hand, from `games/xcx`, after the extraction steps. They
+use the same `XCX_build/` as `build_app.py`, which already holds everything up to `make prepare`.
 
 ```sh
 cd games/xcx
@@ -264,8 +276,7 @@ Extra keys:
 - **1** shows or hides the on-screen overlay.
 - **2** cycles MetalFX frame interpolation: off, 30+30, half the refresh rate, unlimited. It works, but on an M1 it costs
   more than it gains: with 30+30 the game itself drops to about 23-27 fps. It is off at start.
-- Keys **3** and **4** come from the Tears of the Kingdom runtime (picture mode and aspect ratio) and have not been
-  checked with this game.
+- Keys **3** and **4** do nothing: Tears of the Kingdom's picture-mode and ultrawide keys are not part of this port.
 
 ## Where things are
 

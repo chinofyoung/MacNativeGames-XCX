@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import modes
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))   # extract_exefs / extract_romfs: this folder's copies of games/totk/scripts
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # extract_exefs / extract_romfs: this folder's libraries, adapted from the original MacNativeGames TotK scripts
 from extract_exefs import (decrypt, read_at, require, load_keys, load_title_keys, container_entries, common_tickets,
                            nca_ctr_key, read_nca_header, partition_entries)
 from extract_romfs import index_romfs
@@ -258,7 +258,7 @@ class Patched:
 
 
 def verify_ivfc(fs, size, read, image_path):
-    """All six IVFC levels (as games/totk/scripts/extract_romfs.py); level 6 is streamed to image_path."""
+    """All six IVFC levels (as the original MacNativeGames TotK extract_romfs.py checked them); level 6 is streamed to image_path."""
     require(fs[8:12] == b'IVFC' and struct.unpack_from('<III', fs, 12) == (0x20000, 32, 7), 'Unsupported IVFC layout')
     levels = [struct.unpack_from('<QQII', fs, 0x18 + j * 24) for j in range(6)]
     parent, counts, digest = fs[0xc8:0xe8], [], hashlib.sha256()

@@ -2360,10 +2360,10 @@ void dm_gfx_set_flag(const char *name, int v) {
 #endif
     if (!strcmp(name, "cube_merge")) { atomic_store(&g_cg_on, v != 0); MLOG("[flag] cube_merge = %d", v != 0); return; }
     if (!strcmp(name, "skip_invisible")) { skv_set(v); return; }
-    if (!strcmp(name, "mfx_upscale")) { mfxup_set(v < 0 ? !mfxup_enabled() : v); return; }   // TOTK_MFX_UPSCALE at run time (manual key 3 picture mode)
+    if (!strcmp(name, "mfx_upscale")) { mfxup_set(v < 0 ? !mfxup_enabled() : v); return; }   // TOTK_MFX_UPSCALE at run time
     if (!strcmp(name, "mfx_interp")) { mfx_set(v); return; }
     if (!strcmp(name, "draw_log")) { extern _Atomic long g_draw_log; atomic_store(&g_draw_log, v); MLOG("[flag] draw_log: every draw and dispatch of the next %d frames", v); return; }
-    if (!strcmp(name, "uw_log")) { extern _Atomic long g_uw_log; atomic_store(&g_uw_log, v); MLOG("[flag] uw_log: canvas draws of the next %d frames", v); return; }   // key 4 UI squeeze diagnostic
+    if (!strcmp(name, "uw_log")) { extern _Atomic long g_uw_log; atomic_store(&g_uw_log, v); MLOG("[flag] uw_log: canvas draws of the next %d frames", v); return; }   // ultrawide UI squeeze diagnostic
     if (!strcmp(name, "mfx_output")) { mfxup_output_set(v < 0 ? !mfxup_output_enabled() : v); return; }   // TOTK_MFX_OUTPUT at run time (the window output stage)
     if (!strcmp(name, "pass_gpu")) {
         if (v < 0 || v > 120) { MLOG("[flag] pass_gpu requires 0..120 frames"); return; }
@@ -4326,7 +4326,8 @@ static int mfx_ui_vs(const char *key) {
     for (size_t i = 0; i < sizeof ui / sizeof *ui; i++) if (!strncmp(key, ui[i], 8)) return 1;
     return 0;
 }
-/* Key 4 / TOTK_ASPECT (runtime/aspect_patch.h): the camera sees a wider view squeezed into the 16:9 canvas and the
+/* TotK's ultrawide mode (its key 4 / TOTK_ASPECT aspect patch, not part of this port: runtime_aspect_now is always 0 in
+   runtime/game_patches.c, so none of this runs here): the camera sees a wider view squeezed into the 16:9 canvas and the
    present stretches the canvas over the window, so the UI drawn into the canvas would come out stretched as well. Its
    draws are squeezed back about the canvas centre instead, so the HUD keeps its shape in the middle 16:9 of the window.
    A UI draw: into the canvas, from the first draw with a UI vertex shader on (as TOTK_MFX takes it), a quad of 6
@@ -4562,7 +4563,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex(int clear_only) {
       void ts_note(id pd, NSUInteger nc); ts_note(pd, (NSUInteger)R.rt.n); }
     ser_gate();
     if (mfx_enabled()) mfx_pass_setup(pd);   // TOTK: MetalFX scene / UI attachments, G-buffer depth
-    else if (uw_ratio()) canvas_learn(pd);   // key 4: the canvas the UI is squeezed in
+    else if (uw_ratio()) canvas_learn(pd);   // ultrawide: the canvas the UI is squeezed in
     g_enc = enc_r_begin(pd);
     if (!g_enc) g_rpb_why = 3;
     args_dirty_all();
@@ -6783,10 +6784,11 @@ static void warm_start(void) {
         NSString *seed = [dir stringByAppendingPathComponent:@"pso_manifest.tsv"];
         NSMutableArray<NSString *> *all = [NSMutableArray array];
         // The first list is the one the first frame waits for (g_warm_priority_done below): only what the title screen,
-        // its menu and the save list use (pso_title.tsv, recorded 2026-10-18 on 1.4.3, 1.1.2 and 1.0.0; rows of another
-        // version are not in this cache and are skipped like any missing row). With the
-        // 8,290 prepared shaders first the title came after 7-8 s even with warm caches and after about 10 minutes on a
-        // Mac whose Metal cache has never seen them. Without the title list the game's manifest goes first, as before.
+        // its menu and the save list use (pso_title.tsv; in the original MacNativeGames TotK code this is adapted from,
+        // recorded 2026-10-18 on TotK 1.4.3, 1.1.2 and 1.0.0; rows of another version are not in this cache and are skipped
+        // like any missing row). For TotK, with its 8,290 prepared shaders first, the title came after 7-8 s even with warm
+        // caches and after about 10 minutes on a Mac whose Metal cache had never seen them. This port ships no title list or
+        // manifest yet (no startup shader seed), so the player's own and the collected lists below are the ones warmed.
         if ([fm fileExistsAtPath:title]) [all addObject:title];
         if ([fm fileExistsAtPath:seed]) [all addObject:seed];
         NSString *user = pso_user_path();
@@ -10134,7 +10136,7 @@ frz_plain:;
         PD("L %llu 分层通道内的绘制不能写层号，在此切开", g_stat_pass); rp_end(); g_lay.refuse = 1; g_lay.refused++; }
     if (!g_mfx.scene_done && R.rt.n > 0 && R.rt.color[0] && MFX_IS_CANVAS(R.rt.color[0]->serial) && pr && pr->sh[0] && MFX_UI_DRAW(pr) && mfx_enabled())
         mfx_snapshot_scene();   // TOTK_MFX: first UI draw into the canvas: copy the finished scene first
-    if (!g_uw_ui && uw_on_canvas() && pr && pr->sh[0] && mfx_ui_vs(pr->sh[0]->key)) g_uw_ui = 1;   // key 4: the UI begins
+    if (!g_uw_ui && uw_on_canvas() && pr && pr->sh[0] && mfx_ui_vs(pr->sh[0]->key)) g_uw_ui = 1;   // ultrawide: the UI begins
     id<MTLRenderCommandEncoder> en = rp_begin_ex(mode);
     g_fd_dw = NULL; g_fd_di = NULL;
     if (!en) { g_draw_skip[8]++; PD("S %llu no-encoder has_rt=%d n=%d why=%d mode=%d", g_stat_pass, R.has_rt, R.rt.n, g_rpb_why, mode); return; }
@@ -10198,7 +10200,7 @@ frz_plain:;
     if (g_ui_rect_fn && dw && dw->count == 4 && S.nattr == 2 && S.stream[0].stride == 20) { double uy = 0, uh = 1; g_ui_rect_fn(&uy, &uh);
         if (uh > 0 && uh < 1) { if (ui_cover_all(uh)) vs = 1 / uh; else if (uy > 0) { so = lround(uy * th); if (ui_mat_ok()) moff = 2 * uy; else { vo = so; static int n; if (n++ < 4) MLOG("界面下移：投影矩阵这次读不到，退回挪视口（通道 %llu）", g_stat_pass); } } } }
     if (moff != g_ui_moff) { g_ui_moff = moff; args_dirty_stage(0); }
-    double ux = uw_ui_squeeze(pr && pr->sh[0] ? pr->sh[0]->key : NULL, dw, di, tw, th), cx = tw / 2.0;   // key 4: UI squeezed by 1 / ux about the canvas centre
+    double ux = uw_ui_squeeze(pr && pr->sh[0] ? pr->sh[0]->key : NULL, dw, di, tw, th), cx = tw / 2.0;   // ultrawide: UI squeezed by 1 / ux about the canvas centre
     double vx = S.has_vp ? S.vp[0][0] : 0, vw = S.has_vp ? S.vp[0][2] : tw;
     if (ux != 1) { vx = cx + (vx - cx) / ux; vw /= ux; }
     if ((atomic_load(&g_uw_log) > 0 && uw_on_canvas()) || atomic_load(&g_draw_log) > 0)
@@ -11819,7 +11821,7 @@ static int load_overlay_prepare(int slot, MTLViewport vp, MTLViewport *ovp, floa
 /* TOTK 2K output (user, 2026-10-16 night: "2K output with MetalFX"): when the window or the full screen shows the game
    picture bigger than it is (the 1920x1080 picture at 2560x1440 full screen on the user's 3440x1440 display), MetalFX
    upscales it to the viewport (perceptual: display values) and the present draws the result 1:1, instead of the bilinear
-   stretch. Key 3 enables both MetalFX stages in its manual mode; TOTK_MFX_OUTPUT=0 disables the output stage. Only an enlargement
+   stretch. TOTK_MFX_UPSCALE=1 with TOTK_MFX_OUTPUT=1 (the launcher's MetalFX scaler) enables both MetalFX stages; TOTK_MFX_OUTPUT=0 disables the output stage. Only an enlargement
    by a margin and a picture region at the texture's origin (MetalFX reads the top-left content region); while the window
    is being resized the size must hold for 15 pictures first (building a scaler per size would stall every present). */
 static uint64_t g_outup_n, g_outup_skip[3];   // done; skipped: off, not an enlargement / region not at the origin / not built, size settling
@@ -11863,12 +11865,12 @@ static void outup_note_gpu(int slot) {   // the present command buffer of this s
              (unsigned long long)g_outup_n, a[256], a[486], (unsigned long long)g_outup_skip[0], (unsigned long long)g_outup_skip[1], (unsigned long long)g_outup_skip[2]);
     }
 }
-// TOTK_STRETCH=1, or the ultrawide ratio of key 4 / TOTK_ASPECT: fill the window whatever its shape, like an emulator's "Stretch to Window" (aspect-ratio mods such as
+// TOTK_STRETCH=1, or TotK's ultrawide ratio (runtime_aspect_now, always 0 in this port): fill the window whatever its shape, like an emulator's "Stretch to Window" (aspect-ratio mods such as
 // TOTK-Ultrawide draw a horizontally squeezed picture for it). Off: the game picture keeps its shape, centred.
 static int present_stretch(void) {
     static int on = -1;
     if (on < 0) { const char *e = getenv("TOTK_STRETCH"); on = e && !strcmp(e, "1"); }
-    return on || (runtime_aspect_now && runtime_aspect_now() > 0);   // key 4 / TOTK_ASPECT: runtime/aspect_patch.h
+    return on || (runtime_aspect_now && runtime_aspect_now() > 0);   // TotK's ultrawide ratio; 0 here (runtime/game_patches.c)
 }
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int fps_overlay) {
     NSUInteger cx = 0, cy = 0, cw = src.width, ch = src.height;
@@ -12788,7 +12790,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     framegap_note();
     int discard = atomic_load(&g_present_discard), islot = mfx_enabled() && t ? mfx_present_frame(t, period, discard) : -1;
     if (mfx_latch() && !mfx_enabled()) { g_mfx.scene_done = g_mfx.ui_cleared = g_mfx.depth_done = g_mfx.want_cam = g_mfx.canvas_draws = 0; BOTW_MFX_FRAME_RESET() }   // key 2 / flag mfx_interp: the next frame is fully on or off
-    if (t && !mfx_enabled() && uw_ratio()) uw_note_present(t);   // key 4: the canvas search (TOTK_MFX does it in mfx_present_frame)
+    if (t && !mfx_enabled() && uw_ratio()) uw_note_present(t);   // ultrawide: the canvas search (TOTK_MFX does it in mfx_present_frame)
     mtl_wb_eager();
     g_uw_ui = 0;
     if (atomic_load(&g_uw_log) > 0) atomic_fetch_sub(&g_uw_log, 1);

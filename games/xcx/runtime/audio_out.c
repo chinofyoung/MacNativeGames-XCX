@@ -1,4 +1,5 @@
-/* audout:u — nn::audio AudioOut, which Bayonetta 3's Wwise uses for its final mix (TOTK only uses the audio renderer,
+/* audout:u — nn::audio AudioOut, which Wwise uses for its final mix (Bayonetta 3's in the original MacNativeGames project,
+   Xenoblade Chronicles X's here; TotK only uses the audio renderer,
    audren:u). Commands and layouts follow the public switchbrew description ("Audio services": IAudioOutManager, IAudioOut).
    Each AudioOut is a Core Audio AudioQueue: an appended buffer's samples are copied and enqueued; when the device has
    played it, the queue's callback gives the buffer back (GetReleasedAudioOutBuffers) and signals the buffer event, so

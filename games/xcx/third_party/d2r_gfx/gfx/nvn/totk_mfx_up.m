@@ -25,7 +25,7 @@
 enum { MFXUP_OLD = 8, MFXUP_OLD_AFTER = 8, MFXUP_CACHE = 3, MFXUP_BAD = 4, MFXUP_RETRY_MS = 10000 };   // replaced objects kept for this many later encodes (the GPU is done with them by then)
 /* One scaler configuration. Building a scaler takes about 70 ms (2026-10-17), so a new one is built on a background queue
    while the caller keeps its fallback (the game's own upscale, the bilinear present) for those frames, and the last few
-   are kept: switching back (key 3, a window going in and out of full screen) is instant. */
+   are kept: switching back (a window going in and out of full screen) is instant. */
 typedef struct { NSUInteger in_w, in_h, out_w, out_h; MTLPixelFormat in_fmt, out_fmt; int mode, own; } cfg_t;   // out_fmt: dst's (own output: invalid)
 typedef struct { cfg_t cfg; id<MTL4FXSpatialScaler> sc; id<MTLTexture> out; uint64_t used; } built_t;
 typedef struct {

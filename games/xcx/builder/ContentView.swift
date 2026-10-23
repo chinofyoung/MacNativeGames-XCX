@@ -64,8 +64,17 @@ struct ContentView: View {
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
                     FileRow(title: "Work folder", detail: "keeps every step, so a rebuild takes seconds (about 16 GB)",
                             field: .work, kind: .folder, optional: true,
-                            placeholder: model.defaultWork?.path ?? "XCX_build next to the game file")
+                            placeholder: model.defaultWork?.path ?? "XCX_build at the repository root")
                 }
+                Toggle(isOn: $model.deleteWork) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Delete the work folder when the build finishes")
+                        Text("Frees its space after a successful build; a rebuild or update then starts from scratch "
+                             + "(about 8 minutes).")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(model.isRunning)
             }
 
             RequirementsSection()
@@ -336,6 +345,11 @@ struct ResultView: View {
                 if out.hasSuffix(".ipa") {
                     Text("Unsigned: sign and install it with your own Apple ID (games/xcx/ios/tools/install_device.py) "
                          + "or a sideloading tool. It holds no game image; the README says how to copy it over.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.workDeleted {
+                    Text("The work folder was deleted. Its game data are shared with the app as APFS clones, so that "
+                         + "space returns only once the app is deleted too.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("The app holds the game: keep it for your own use and never share it.")

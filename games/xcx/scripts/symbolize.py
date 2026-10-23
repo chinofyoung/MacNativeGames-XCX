@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Name the functions in a runtime call chain: reads "caller <module>+0x<offset>" lines (or arguments like sdk+0x1234)
 and prints the defined symbol containing each address, from <work>/analysis/runtime-layout.json (prepare_runtime.py).
-Symbols are the modules' own exports; main exports little, so main addresses often stay unnamed. XCX_WORK=<work folder> when it is not games/xcx/XCX_build."""
+Symbols are the modules' own exports; main exports little, so main addresses often stay unnamed. XCX_WORK=<work folder> when it is not XCX_build at the repository root."""
 import bisect, json, os, re, subprocess, sys
 from pathlib import Path
 
-work = Path(os.environ.get('XCX_WORK') or Path(__file__).resolve().parents[1] / 'XCX_build')   # XCX_WORK: the work folder
+work = Path(os.environ.get('XCX_WORK') or Path(__file__).resolve().parents[3] / 'XCX_build')   # XCX_WORK: the work folder
 modules = {m['name']: m for m in json.loads((work / 'analysis/runtime-layout.json').read_text())}
 tables = {}
 for name, m in modules.items():

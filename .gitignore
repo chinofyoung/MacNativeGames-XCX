@@ -25,10 +25,8 @@ games/xcx/ios/project.generated.yml
 # these appear only when the project is built in place)
 games/xcx/tools/totk_xlate/obj/
 games/xcx/tools/totk_xlate/bin/
-# personal files (XCI, keys, firmware), the work folder and screenshots of game imagery;
-# nsw/ is the old name of personal/ (it held the work folder too)
+# personal files (XCI, keys, firmware), the work folder and screenshots of game imagery
 personal/
 /XCX_build/
 /XCX_build_*/
-nsw/
 docs/screenshots/

@@ -3,8 +3,9 @@
 
 Writes <work>/build/runtime_tables.h (modules, symbols, relocations, gates), romfs_config.h and
 extracted/v101/romfs/runtime-index.bin (the RomFS index the runtime reads), and shared_fonts_config.h.
-Adapted from games/totk/scripts/prepare_runtime.py, prepare_romfs_backend.py and prepare_shared_fonts.py; every input
-is checked against assets/expected-v1.0.1.json first. Forked from games/by3/scripts/prepare_runtime.py.
+Adapted from the original MacNativeGames TotK code (its games/totk/scripts/prepare_runtime.py, prepare_romfs_backend.py
+and prepare_shared_fonts.py), by way of that project's Bayonetta 3 fork (games/by3/scripts/prepare_runtime.py), and
+retargeted to Xenoblade Chronicles X 1.0.1; every input is checked against assets/expected-v1.0.1.json first.
 """
 import argparse
 import hashlib
@@ -191,7 +192,7 @@ def shared_fonts_config(work, out):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--work', type=Path, default=HERE / 'XCX_build')
+    parser.add_argument('--work', type=Path, default=HERE.parents[1] / 'XCX_build')   # <repository root>/XCX_build
     work = parser.parse_args().work.resolve()
     out = work / 'build'
     out.mkdir(parents=True, exist_ok=True)

@@ -151,7 +151,7 @@ void fps_overlay_text(const fps_overlay_info *info, char *text, size_t n) {
     size_text(ss, sizeof ss, info->screen_w, info->screen_h);
     char gen[8] = "";
     if (info->gen > 0 && info->fps >= 0) snprintf(gen, sizeof gen, "+%d", info->gen > 999 ? 999 : info->gen);   // interpolated frames a second (key 2)
-    // MetalFX did the upscale in the last frames (key 3 selects the manual MetalFX mode); 2K: true 2K output.
+    // MetalFX did the upscale in the last frames (TOTK_MFX_UPSCALE); 2K: TotK's true 2K output (not part of this port).
     // The whole line in the system font, so switching MetalFX does not switch the font.
     static int render = -1; if (render < 0) { const char *e = getenv("XCX_HUD_RENDER"); render = e && !strcmp(e, "1"); }
     char rs[16] = "";
