@@ -16,7 +16,7 @@ named by hash and subject. Game data, keys and saves are never committed (see `.
 | 2 | A runtime target with the Bayonetta-only parts compiled out, booting to `nnMain` | done 2026-10-23 |
 | 3 | Follow every unknown service / command / NVN call until the first `nvnQueuePresentTexture` | done 2026-10-23 (title screen; menus answer input) |
 | 4 | A picture, audio (Wwise), input, saves | in progress: controllable gameplay and battle with characters drawn; saves write; key 2 interpolates (too slow on an M1) |
-| 5 | Performance, shaders, packaging as an app | in progress: update 2.0.0 supported next to 1.0.1 (built and played to the field, 2026-10-23); `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--gui` does the same from a native window; `--platform ios` makes an experimental unsigned IPA (built and checked, not run on a device; no picture to speak of without up-front shader translation); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23); an experimental 60 fps patch, off by default, lifts the game's own 30 fps cap on Mac and iPhone (2026-10-23) |
+| 5 | Performance, shaders, packaging as an app | in progress: update 2.0.0 supported next to 1.0.1 (built and played to the field, 2026-10-23); `build_app.py` turns the player's XCI into a self-contained app in one command (7.2 min clean, 1.7 s again), checked after a move out of the work folder; `--gui` does the same from a native window; `--platform ios` makes an experimental unsigned IPA (installed and played on an iPhone 15 Pro Max at 30 fps in the first area; draws whose shaders the IPA does not carry are skipped until `fill_shaders.py` sends them, first done 2026-10-24); `make app` builds a development app; clear sinking cuts GPU time per frame on an M1 from about 20 to about 17 ms (2026-10-23); an experimental 60 fps patch, off by default, lifts the game's own 30 fps cap on Mac and iPhone (2026-10-23) |
 
 ## Log
 
@@ -1272,3 +1272,16 @@ at this point of the story; cutscenes (in-engine and movies), Skells, cities, sw
 compared; a battle's auto-attack interval was not measured. The game's busy-wait limiter still spins (now for less of
 each frame). On the M1 Air and the iPhone the higher frame rate heats the device faster, which brings the frame rate
 down again after a few minutes. 1.0.1 was not played with the patch.
+
+### 2026-10-24: `fill_shaders.py` on a device
+
+On an iPhone 15 Pro Max (iOS 27.2), the game skipped the draws whose shaders the IPA did not carry: the player character
+was drawn without their outfit. `ios/tools/fill_shaders.py` pulled 201 requests, translated them, compiled device
+metallibs and pushed the pack. After a restart the character was drawn dressed. This was the tool's first run against a
+device.
+
+- A sideloaded app (here `build_app.py`'s install step with a free Apple ID) has the team in its bundle id. The install
+  log prints it (`bundle org.macnativegames.xcx.gvrm33qnkk`). The default `org.macnativegames.xcx` does not match, so
+  pass `--bundle-id` (or `XCX_BUNDLE_ID`). `xcrun devicectl list devices` gives the `--device` id.
+- Without Apple's Metal Toolchain the tool still works, but the pack has MSL source only, which the device compiles at
+  start. `xcodebuild -downloadComponent MetalToolchain` installs it, and `--with-done` rebuilds the packs already sent.

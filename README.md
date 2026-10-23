@@ -314,7 +314,12 @@ Documents. The log is `log.txt` there, which you can read in the Files app (On M
 
 Shaders the device misses are listed in `shader-list-contribution.txt` and saved as requests in Documents. With the
 device connected, `python3 games/xcx/ios/tools/fill_shaders.py --work <work folder> --device <id>` translates them on
-the Mac and sends them to the device, and later IPA builds carry them too. This tool has not been run against a device.
+the Mac and sends them to the device, and later IPA builds carry them too. The game merges them on its next start. On
+an iPhone 15 Pro Max it filled in the clothes of the player character. `xcrun devicectl list devices` gives the device
+id. A sideloaded app has the team in its bundle id (the install log prints it, e.g. `org.macnativegames.xcx.gvrm33qnkk`):
+pass it as `--bundle-id` (or `XCX_BUNDLE_ID`). Without Apple's Metal Toolchain the tool sends MSL source only, which the
+device compiles at start; `xcodebuild -downloadComponent MetalToolchain` installs it, and `--with-done` rebuilds the
+packs already sent.
 
 ## Controls
 

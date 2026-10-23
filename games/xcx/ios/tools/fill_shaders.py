@@ -4,7 +4,10 @@
 Restored from the original project's games/totk/ios/tools/fill_shaders.py. The graphics layer is the same, so the request
 and pack formats are too; what this port lacks is the original's shared shader list, so the translations are kept in the
 work folder instead (<work>/build/ios-fill/rt-<chain>), and the next `build_app.py --platform ios` carries them in the
-app's shader seed. EXPERIMENTAL, like the iOS build: it has not been run against a device (none was connected).
+app's shader seed. EXPERIMENTAL, like the iOS build. First run against a device on 2026-10-24 (iPhone 15 Pro Max): 201
+requests translated and pushed, and after a restart the player character was drawn with their outfit. A sideloaded app's
+bundle id has the team suffix (org.macnativegames.xcx.<team id, lowercase>; the install log prints it), so pass it as
+--bundle-id. Without the Metal Toolchain (xcodebuild -downloadComponent MetalToolchain) the pack has MSL only.
 
 iOS has no shader translator. On a miss the game skips the draws that need the variant and saves the complete request
 (variant, stage, guest code) to Documents/shader-requests/ (third_party/d2r_gfx/gfx/nvn/totk_shader_rt.m). This tool
@@ -121,7 +124,8 @@ def main():
     ap.add_argument('--work', type=Path, required=True, help='the work folder of the build (build/shader-service, build/spirv-cross)')
     ap.add_argument('--device', default=os.environ.get('XCX_IOS_DEVICE'), help='devicectl device id (or XCX_IOS_DEVICE)')
     ap.add_argument('--bundle-id', default=os.environ.get('XCX_BUNDLE_ID', 'org.macnativegames.xcx'),
-                    help='the installed app\'s identifier (install_device.py uses org.macnativegames.xcx.<team>)')
+                    help='the installed app\'s identifier (install_device.py uses org.macnativegames.xcx.<team id, lowercase>;'
+                    ' the install log prints it)')
     ap.add_argument('--requests', type=Path, help='use requests already copied from the device instead of pulling them')
     ap.add_argument('--no-push', action='store_true', help='translate and build the pack, but do not send it')
     ap.add_argument('--with-done', action='store_true', help='also rebuild the variants filled before (shader-requests/done),'

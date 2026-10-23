@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Sign the unsigned Xenoblade Chronicles X IPA with your own Xcode team and install it on a connected iPhone / iPad.
 
-Restored from the original project's games/totk/ios/tools/install_device.py and adapted for this port (EXPERIMENTAL; not
-run against a device yet: none was connected when it was adapted).
+Restored from the original project's games/totk/ios/tools/install_device.py and adapted for this port (EXPERIMENTAL; used
+to install the IPA on an iPhone 15 Pro Max with a free Apple ID, 2026-10-23).
 
 A free (Personal Team) Apple ID signs for 7 days, a paid membership for a year: run this again to renew. Reinstalling
 with the same team and bundle identifier keeps the saves and the shader cache (they are in the app's Documents).
