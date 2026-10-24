@@ -302,8 +302,10 @@ int main(int argc, char **argv) {
         /* A self-contained app keeps what the game writes out of its signed bundle (Tears of the Kingdom's app does the
            same): the shader cache in the user's Library, and its own RomFS check record (the record names the image's
            file identity, and the app's image is another file than a work folder's, so the two kinds of app do not
-           replace each other's record and verify 14 GB again in turn). TOTK_SHADER_CACHE from the environment wins. */
-        const char *cache_env = getenv("TOTK_SHADER_CACHE");
+           replace each other's record and verify 14 GB again in turn). XC_SHADER_CACHE (or the older TOTK_SHADER_CACHE) from the
+           environment wins. */
+        const char *cache_env = getenv("XC_SHADER_CACHE");
+        if (!cache_env || !*cache_env) cache_env = getenv("TOTK_SHADER_CACHE");
         NSString *cache = cache_env && *cache_env ? @(cache_env) : [data stringByAppendingFormat:@"/shader-cache/rt-%s", DMSH_CHAIN];
         NSString *record = bundled ? [data stringByAppendingPathComponent:@"app-romfs-record"] : data;
         if (!make_dir(profile) || !make_dir(slot) || !make_dir(logs) || !make_dir(record) || (bundled && !make_dir(cache))) {

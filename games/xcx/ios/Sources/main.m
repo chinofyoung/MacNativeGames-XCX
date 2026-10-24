@@ -231,7 +231,8 @@ static void lifecycle_observe(void) {
        chain; other chains' folders are only cache and are removed in the background. */
     NSString *cacheRoot = [docs stringByAppendingPathComponent:@"shader-cache"], *chainDir = @"rt-" DMSH_CHAIN;
     NSString *cache = [cacheRoot stringByAppendingPathComponent:chainDir];
-    const char *testCache = getenv("TOTK_SHADER_CACHE");   // test launches may name another folder in Documents
+    const char *testCache = getenv("XC_SHADER_CACHE");
+    if (!testCache || !*testCache) testCache = getenv("TOTK_SHADER_CACHE");   // (older name) test launches may name another folder in Documents
     if (testCache && *testCache && !strstr(testCache, "..")) cache = [docs stringByAppendingPathComponent:@(testCache)];
     [fm createDirectoryAtPath:cache withIntermediateDirectories:YES attributes:nil error:nil];
     setenv("TOTK_SHADER_CACHE",cache.fileSystemRepresentation,1);

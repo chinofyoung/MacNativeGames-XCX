@@ -57,7 +57,8 @@ static NSString *root_dir(void) {   // native-port/ (the executable lives in nat
 NSString *totk_rt_dir(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        const char *e = getenv("TOTK_SHADER_CACHE");
+        const char *e = getenv("XC_SHADER_CACHE");   // preferred name; TOTK_SHADER_CACHE still works
+        if (!e || !*e) e = getenv("TOTK_SHADER_CACHE");
 #if TARGET_OS_IPHONE
         g_dir = e ? @(e) : [NSString stringWithFormat:@"shader-cache/rt-%s", DMSH_CHAIN];   // in Documents (the app's working directory)
 #else

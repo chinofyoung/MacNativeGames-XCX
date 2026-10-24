@@ -139,8 +139,8 @@ costs no extra space on the same volume, and it no longer needs the work folder.
 `Contents/Resources/xcx/build/xcx-native` is there (and `XCX_WORK` is not set). Everything the game writes goes to the
 user's Library, so the signed bundle stays read-only:
 
-- the shader cache to `~/Library/Application Support/MacNativeGames/XCX/shader-cache/rt-<chain>` (`TOTK_SHADER_CACHE`,
-  as Tears of the Kingdom's app does),
+- the shader cache to `~/Library/Application Support/MacNativeGames/XCX/shader-cache/rt-<chain>` (`XC_SHADER_CACHE`; `TOTK_SHADER_CACHE`,
+  as Tears of the Kingdom's app uses, is still accepted),
 - the RomFS check record to `.../XCX/app-romfs-record/` (the record names the image's file identity; the app's image
   is another file than the work folder's, so the two kinds of app keep separate records instead of replacing each
   other's and hashing 14 GB again in turn),
