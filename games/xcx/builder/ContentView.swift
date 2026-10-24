@@ -514,7 +514,7 @@ struct UpdateWarning: View {
                     Label("This updates the app there from \(installed.display) to \(new).", systemImage: "arrow.up.circle.fill")
                         .foregroundStyle(.blue).bold()
                     Text("The app is replaced. Your saves stay: they are in "
-                         + "~/Library/Application Support/MacNativeGames/XCX/profile, not in the app, and \(new) continues "
+                         + "~/Library/Application Support/XCNative/XCX/profile, not in the app, and \(new) continues "
                          + "from them. Once \(new) has saved, that save may not load in \(installed.display) again, so "
                          + "back the saves up first if you may want to go back.")
                         .font(.callout)
@@ -566,7 +566,7 @@ struct UpdateSheet: View {
             if model.updatesOlderApp {
                 Text(LocalizedStringKey("Your saves are kept: they are not in the app. **Once \(new) has saved, the save "
                      + "may not load in \(old) again.** A backup copies them to "
-                     + "~/Library/Application Support/MacNativeGames/XCX/profile-\(old)-backup-<date>."))
+                     + "~/Library/Application Support/XCNative/XCX/profile-\(old)-backup-<date>."))
             } else {
                 Text("The saves may have been written by \(old), which \(new) may not read. If you backed the profile up "
                      + "before updating, put that backup back first.")

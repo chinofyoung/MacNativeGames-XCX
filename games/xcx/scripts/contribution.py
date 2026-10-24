@@ -2,7 +2,7 @@
 """The player's contribution file: the shaders this Mac's game met that the shared shader list does not have yet.
 
 The game writes each such shader once as a list V row (the shader key and the bind state, no game data) to
-~/Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt (TOTK_SHADER_CONTRIB, set by app/launcher.m;
+~/Library/Application Support/XCNative/XCX/shader-list-contribution.txt (TOTK_SHADER_CONTRIB, set by app/launcher.m;
 third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h). After a build, build_app.py counts the rows the list it used lacks
 and the window (games/xcx/builder) offers to share them: a GitHub issue in the shader-list form, with the file attached.
 The file is read with shader_list.parse_row, so a comment, a line cut off mid-write or anything else that is not a valid
@@ -14,9 +14,15 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app_bundle
 from shader_list import ShaderList, parse_row
 
-MAC_FILE = Path.home()/'Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt'
+
+
+def mac_file():
+    """This Mac's file, in the data folder in use (the MacNativeGames one while only that exists), resolved at each use
+    so a move of the folder (app_bundle.migrate_library) is followed."""
+    return app_bundle.data_folder()/'shader-list-contribution.txt'
 ISSUE_NEW = 'https://github.com/chinofyoung/XC-Native/issues/new?template=shader-list.yml'
 
 
@@ -46,8 +52,8 @@ def main(argv):
     if len(argv) > 1:
         print(__doc__, file=sys.stderr)
         return 2
-    rows = new_rows(MAC_FILE, Path(argv[0]) if argv else None)
-    print(f'{len(rows)} new rows in {MAC_FILE}')
+    rows = new_rows(mac_file(), Path(argv[0]) if argv else None)
+    print(f'{len(rows)} new rows in {mac_file()}')
     if rows:
         print(issue_url(len(rows), '<version>', 'Mac'))
     return 0

@@ -4,10 +4,10 @@
 The app writes each such shader once as a list V row (the shader key and the bind state, no game data) to
 Documents/shader-list-contribution.txt (TOTK_SHADER_CONTRIB, set by ios/Sources/main.m). `pull` copies that file from the
 device with devicectl (the way fill_shaders.py copies the requests) and appends the valid rows the Mac's contribution file
-(~/Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt, scripts/contribution.py) does not have yet.
+(~/Library/Application Support/XCNative/XCX/shader-list-contribution.txt, scripts/contribution.py) does not have yet.
 Rows already there stay as they are; a comment, a cut-off line or anything else that is not a valid row (shader_list.parse_row)
 is not taken over. build_app.py --platform ios runs this first when XCX_IOS_DEVICE is set; the builder window and the game's
-prompt then offer the rows to share. A sideloaded app's bundle id has the team suffix (org.macnativegames.xcx.<team id,
+prompt then offer the rows to share. A sideloaded app's bundle id has the team suffix (org.xcnative.xcx.<team id,
 lowercase>; the install log prints it): pass it as --bundle-id or XCX_BUNDLE_ID.
 The original project's check / install / uninstall (a LaunchAgent) are gone; they print a pointer to `pull`.
 usage: shader_contrib_watch.py pull --device <id> [--bundle-id <id>] [--store <file>]"""
@@ -15,11 +15,11 @@ import argparse, os, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'scripts'))
+import app_bundle
 from shader_list import parse_row
 
-STORE = Path.home()/'Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt'
 REMOTE = 'Documents/shader-list-contribution.txt'
-DEFAULT_BUNDLE = 'org.macnativegames.xcx'
+DEFAULT_BUNDLE = app_bundle.BUNDLE_ID
 
 
 def devicectl(cmd):
@@ -54,11 +54,12 @@ def merge(copy, store):
     return len(new)
 
 
-def pull(device, bundle_id, store=STORE, run=devicectl, report=None):
+def pull(device, bundle_id, store=None, run=devicectl, report=None):
     """Copy the device's Documents/shader-list-contribution.txt and merge its valid rows into `store`; the number of rows
-    added. A device that cannot be reached, an app without the file or a failed merge is reported (report(message), by
+    added. store: the Mac's file (default: in the data folder in use, app_bundle.data_folder()). A device that cannot be reached, an app without the file or a failed merge is reported (report(message), by
     default on stderr) and adds none: it does not raise. `run` runs a command and returns what subprocess.run does."""
     report = report or (lambda m: print(f'shader_contrib_watch.py: {m}', file=sys.stderr))
+    store = store if store is not None else app_bundle.data_folder()/'shader-list-contribution.txt'
     try:
         with tempfile.TemporaryDirectory(prefix='xcx-contrib-') as tmp:
             copy = Path(tmp)/'shader-list-contribution.txt'
@@ -82,7 +83,8 @@ def main(argv):
     p.add_argument('--device', default=os.environ.get('XCX_IOS_DEVICE'), help='devicectl device id (or XCX_IOS_DEVICE)')
     p.add_argument('--bundle-id', default=os.environ.get('XCX_BUNDLE_ID', DEFAULT_BUNDLE),
                    help='the installed app\'s identifier (the install log prints it; or XCX_BUNDLE_ID)')
-    p.add_argument('--store', type=Path, default=STORE, help=f'the Mac contribution file (default: {STORE})')
+    p.add_argument('--store', type=Path, help='the Mac contribution file (default: shader-list-contribution.txt in '
+                   '~/Library/Application Support/XCNative/XCX, or the MacNativeGames folder while only that exists)')
     for old in ('check', 'install', 'uninstall'):
         sub.add_parser(old)
     args = ap.parse_args(argv)

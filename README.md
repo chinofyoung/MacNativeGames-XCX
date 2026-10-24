@@ -115,7 +115,7 @@ python3 build_app.py "personal/<game>.xci" -k personal/prod.keys --update person
 ```
 
 The app is replaced. **Your saves are not in the app** (they are in
-`~/Library/Application Support/MacNativeGames/XCX/profile`), so 2.0.0 continues from them; a 1.0.1 save loads in
+`~/Library/Application Support/XCNative/XCX/profile`), so 2.0.0 continues from them; a 1.0.1 save loads in
 2.0.0. **The other direction is not guaranteed:** once 2.0.0 has saved, that save may not load in 1.0.1 again. The build
 says when it replaces an older app and prints the command that copies the profile aside, for example
 `cp -R ".../XCX/profile" ".../XCX/profile-1.0.1-backup-<date>"`; the window offers **Back Up Saves** before it builds.
@@ -151,7 +151,7 @@ This opens **Xenoblade Chronicles X Builder**, a small native window:
   and the file.
 
 The window remembers your choices. It never shows or logs key values. The first time, `--gui` compiles the window from
-[`games/xcx/builder`](games/xcx/builder) with `xcrun swiftc` into `~/Library/Caches/MacNativeGames/xcx-builder` (a few
+[`games/xcx/builder`](games/xcx/builder) with `xcrun swiftc` into `~/Library/Caches/XCNative/xcx-builder` (a few
 seconds). The Xcode command line tools are enough, and nothing ready-made is downloaded. The window runs the same
 `build_app.py` as the command below.
 
@@ -279,7 +279,7 @@ This writes `Xenoblade Chronicles X.ipa` next to the game file (`-o` picks anoth
 update.nsp>` for 2.0.0, as for the Mac. The IPA is about
 159 MB (86 MB before the shared list), because it holds the game code, the RomFS index, the system fonts and the
 shaders, but not the 14.3 GB game image. `--ios-seed-cache <folder>` adds another Mac shader cache to carry. By default the build carries the
-cache in `~/Library/Application Support/MacNativeGames/XCX/shader-cache` and the work folder's own caches.
+cache in `~/Library/Application Support/XCNative/XCX/shader-cache` and the work folder's own caches.
 
 **In the window:** pick *iPhone and iPad (experimental)*. The output becomes an `.ipa`, and the prerequisites add Xcode
 with the iOS SDK, xcodegen and CMake, and the iOS platform (Xcode › Settings › Components). **Build IPA** builds it.
@@ -300,10 +300,20 @@ Install it with your own Apple ID or a sideloading tool:
   `python3 games/xcx/ios/tools/install_device.py "Xenoblade Chronicles X.ipa" --device "<device name>" --game-data <work folder>/extracted/<v101 | v200>/romfs/romfs.bin`
   (the version the IPA was built for). `--list-devices` only lists devices and teams, `--dry-run` checks everything
   and stops before signing, and `--progress json` gives one JSON event a line.
-  It signs the app as `org.macnativegames.xcx.<team>`, installs it, and copies the game image once into the app's
+  It signs the app as `org.xcnative.xcx.<team>`, installs it, and copies the game image once into the app's
   Documents/GameData in 1 GiB parts. Later installs skip the copy while the device holds the same image. A free Apple ID
   signs for 7 days and a paid membership for a year. Run the command again to renew; your saves are kept. On first use,
   trust your Apple ID under Settings › General › VPN & Device Management.
+  Until 2026-10-24 the app was `org.macnativegames.xcx.<team>`. iOS treats the new id as another app, so it appears
+  next to the old one with empty Documents. The first install of the new id copies the old app's saves, shader cache,
+  shader list contribution, shader requests and Settings choices over (not the game data, which `--game-data` copies),
+  unless the new app already has saves. It reads one save file back from the new app before it counts the copy as
+  done; if that fails it says how to copy the `save` folder by hand in Finder or the Files app, and the next install
+  tries again. The old app and its data are left alone. Another sideloading tool does not copy anything; move the
+  files in Finder (the device › Files) if you need them.
+  The new ID counts as one more App ID for a free Apple ID (the limit is about 10 per 7 days). The new app needs the
+  14 GB game data again (`--game-data`) while the old app keeps its own copy, so check the device's free space first,
+  and delete the old app only after the new one shows your saves.
 - With another sideloading tool: install the IPA and keep its entitlement (`increased-memory-limit`). Then get the game
   data onto the device: in Finder, select the device, open Files, and drag
   `<work folder>/extracted/<v101 | v200>/romfs/romfs.bin` onto Xenoblade Chronicles X. The app moves it into its GameData folder
@@ -318,7 +328,7 @@ file (see [Sharing shaders](#sharing-shaders)); to fix the gaps before the list 
 device connected, `python3 games/xcx/ios/tools/fill_shaders.py --work <work folder> --device <id>` translates them on
 the Mac and sends them to the device, and later IPA builds carry them too. The game merges them on its next start. On
 an iPhone 15 Pro Max it filled in the clothes of the player character. `xcrun devicectl list devices` gives the device
-id. A sideloaded app has the team in its bundle id (the install log prints it, e.g. `org.macnativegames.xcx.gvrm33qnkk`):
+id. A sideloaded app has the team in its bundle id (the install log prints it, e.g. `org.xcnative.xcx.gvrm33qnkk`):
 pass it as `--bundle-id` (or `XCX_BUNDLE_ID`). Without Apple's Metal Toolchain the tool sends MSL source only, which the
 device compiles at start; `xcodebuild -downloadComponent MetalToolchain` installs it, and `--with-done` rebuilds the
 packs already sent.
@@ -354,15 +364,21 @@ Extra keys:
 
 ## Where things are
 
-- Saves, account and pseudo device id: `~/Library/Application Support/MacNativeGames/XCX/profile`, for both kinds of
+- Saves, account and pseudo device id: `~/Library/Application Support/XCNative/XCX/profile`, for both kinds of
   app. On its first start a development app copies them from `$WORK/user-data` (the profile of terminal runs) if that
   exists, so it continues from the same save. The originals are not changed, and after that the two are separate.
-- Shader cache: the app's in `~/Library/Application Support/MacNativeGames/XCX/shader-cache/`, so the signed app stays
+- Shader cache: the app's in `~/Library/Application Support/XCNative/XCX/shader-cache/`, so the signed app stays
   read-only; a development app's in `$WORK/build/shader-cache/`, shared with terminal runs.
-- RomFS check record and the input file for diagnostic commands: `~/Library/Application Support/MacNativeGames/XCX/`
+- RomFS check record and the input file for diagnostic commands: `~/Library/Application Support/XCNative/XCX/`
   (the app's record in its `app-romfs-record/` folder).
-- Log: `~/Library/Logs/MacNativeGames/xcx.log` (the run before: `xcx.previous.log`). Terminal runs with `make boot`:
+- Log: `~/Library/Logs/XCNative/xcx.log` (the run before: `xcx.previous.log`). Terminal runs with `make boot`:
   `$WORK/logs/boot.log`.
+- Until 2026-10-24 these folders were `~/Library/Application Support/MacNativeGames/XCX` and
+  `~/Library/Logs/MacNativeGames`. The next build or app start moves them to the new place once (a rename, nothing is
+  copied). If both exist, the new one is used and the old one is left as it is. If the move fails, or the game is
+  running, the old folder stays in use and the next start tries again. The log says what happened (`[launcher]
+  library:` lines). Old caches in `~/Library/Caches/MacNativeGames` are not moved; you can delete that folder.
+  Rebuild or delete apps built before this change: an older app would write to the MacNativeGames folder again.
 
 ## Known issues and what has not been checked
 

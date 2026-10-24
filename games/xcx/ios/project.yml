@@ -11,7 +11,7 @@
 # layer (third_party/d2r_gfx/gfx/nvn, tex) with -DGAME_XCX, as the Makefile's GFX_FLAGS.
 name: XCXIOS
 options:
-  bundleIdPrefix: org.macnativegames
+  bundleIdPrefix: org.xcnative
   deploymentTarget:
     iOS: "${XCX_DEPLOYMENT}"
 configFiles:

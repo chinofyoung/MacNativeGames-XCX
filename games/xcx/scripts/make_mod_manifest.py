@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Write the manifest.tsv of a player's RomFS mod (runtime/romfs.c loads it from TOTK_ROMFS_MODS, which the launcher sets to
-~/Library/Application Support/MacNativeGames/TOTK/mods/<version>).
+<data>/mods/<name>/romfs: ~/Library/Application Support/XCNative/XCX/mods in a self-contained app, <work>/../mods
+in a development one; app/launcher.m).
 
 The mod folder holds the replacement files under their RomFS paths (for example Sound/Resource/Stream/Dm_OP_0001.bwav).
 Each line of the manifest names a path, the replacement's size and SHA-256 and the original's SHA-256; the game checks

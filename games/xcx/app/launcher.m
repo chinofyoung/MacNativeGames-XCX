@@ -6,13 +6,14 @@
    - self-contained (the root build_app.py): the game folder is inside the app, Contents/Resources/xcx (the binary, the
      rewritten code, the RomFS index and fonts; the RomFS image is the signed data bundle in Contents/Helpers that
      extracted/<v>/romfs/romfs.bin links to). The app can be moved anywhere. Everything the game writes goes to the
-     user's Library, so the signed bundle stays read-only: the shader cache to Application Support/MacNativeGames/XCX/
+     user's Library, so the signed bundle stays read-only: the shader cache to Application Support/XCNative/XCX/
      shader-cache/rt-<chain> (as Tears of the Kingdom's app), the RomFS check record to .../XCX/app-romfs-record.
    - development (`make app`): a small bundle; the game's data stay in the work folder (XCX_build) named by
      Info.plist's XCXWorkFolder (or XCX_WORK), so nothing large is copied; it runs build/xcx-native-<v>.
    The game version (1.0.1 or 2.0.0) is compiled in (runtime/game_version.h, make VERSION=<v>): <v> is TOTK_GAME_DIR.
    The self-contained mode is used when Contents/Resources/xcx holds the game binary and XCX_WORK is not set.
-   Settings are saved at every change (org.macnativegames.xcx) and shown again next time.
+   Settings are saved at every change (org.xcnative.xcx; the first start takes over org.macnativegames.xcx's, the
+   identifier until 2026-10-24) and shown again next time.
    What each setting does in the runtime:
    - Frame rate: 30 (the game's own; the default) or 60 (experimental): the port's 60 fps patch (XCX_PATCHES=60fps,
      runtime/game_patches.c: the game's vsync count 2 -> 1 and its frame time measured; not part of the presets, saved as
@@ -27,17 +28,22 @@
    from the environment (open --env XCX_PATCHES=<slug>,<slug> <app>) reaches the runtime (runtime/game_patches.c), with
    60fps added when the frame rate is 60; unset and at 30 fps, none is applied.
    Progress: the player's profile (account, saves, pseudo device id, pipeline list) is in Application Support
-   (MacNativeGames/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
+   (XCNative/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
    terminal runs use), so Continue loads the same save; the originals are never moved or changed (development apps
    only: a self-contained app has no work folder). A development app's shader cache stays where the runtime keeps it,
    next to the binary (<work>/build/shader-cache/rt-*), so it and make boot share it.
    Shaders the shared shader list lacks: the game notes them in <data>/shader-list-contribution.txt (TOTK_SHADER_CONTRIB);
-   before the game starts the launcher asks, at 50 and then every 500 more, to share the file (contrib_reminder). */
+   before the game starts the launcher asks, at 50 and then every 500 more, to share the file (contrib_reminder).
+   Until 2026-10-24 the data and log folders were MacNativeGames' (Application Support/MacNativeGames/XCX,
+   Logs/MacNativeGames): the first start moves them (use_library). */
 #import <Cocoa/Cocoa.h>
 #include "dmsh_chain.h"      /* DMSH_CHAIN: the shader cache's name (third_party/d2r_gfx/gfx/nvn) */
 #include "game_version.h"    /* TOTK_GAME_VERSION, TOTK_GAME_DIR (runtime/) */
 #include "totk_shader_contrib.h"   /* the shared shader list contribution and its reminder (third_party/d2r_gfx/gfx/nvn) */
 #include <errno.h>
+#include <libproc.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -72,7 +78,17 @@ static NSString *work_folder(void) {
     return bundle_root() ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"XCXWorkFolder"];
 }
 static NSString *game_binary(void) { return [work_folder() stringByAppendingPathComponent:self_contained() ? APP_BINARY : WORK_BINARY]; }
-static NSString *data_folder(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/XCX"]; }
+/* The user's data and log folders: Application Support/XCNative/XCX and Logs/XCNative, or the MacNativeGames ones they
+   were until 2026-10-24 while those could not be moved (use_library, at the start). */
+#define DATA_FOLDER @"Library/Application Support/XCNative/XCX"
+#define OLD_DATA_FOLDER @"Library/Application Support/MacNativeGames/XCX"
+#define LOGS_FOLDER @"Library/Logs/XCNative"
+#define OLD_LOGS_FOLDER @"Library/Logs/MacNativeGames"
+#define OLD_BUNDLE_ID @"org.macnativegames.xcx"
+static NSString *g_data, *g_logs;
+static NSString *in_home(NSString *sub) { return [NSHomeDirectory() stringByAppendingPathComponent:sub]; }
+static NSString *data_folder(void) { return g_data ?: in_home(DATA_FOLDER); }
+static NSString *logs_folder(void) { return g_logs ?: in_home(LOGS_FOLDER); }
 /* RomFS mods: <work>/../mods/<name>/romfs with a manifest.tsv (make mods); a self-contained app: <data>/mods. */
 static NSString *mods_folder(void) {
     return self_contained() ? [data_folder() stringByAppendingPathComponent:@"mods"]
@@ -237,6 +253,61 @@ static void fail(NSString *s) {
     NSAlert *a = [NSAlert new]; a.messageText = T("Xenoblade Chronicles X no pudo arrancar", "Xenoblade Chronicles X could not start"); a.informativeText = s; [a runModal];
 }
 static BOOL make_dir(NSString *p) { return [NSFileManager.defaultManager createDirectoryAtPath:p withIntermediateDirectories:YES attributes:nil error:nil]; }
+/* The folders moved from MacNativeGames to XCNative on 2026-10-24 (build_app.py does the same, scripts/app_bundle.py
+   migrate_library): when only the old one exists it is renamed to the new one, once (the same volume: nothing is copied).
+   Both there: the new one is used and the old one left as it is; nothing is merged or replaced. A move that fails, or
+   a game still running (it writes its saves by the path it started with), keeps the old one in use for this start.
+   Nothing is deleted. What happened is written to the log once it is open (library_notes). */
+static NSMutableArray<NSString *> *library_notes;
+static BOOL game_running(void) {
+    int n = proc_listallpids(NULL, 0);
+    if (n <= 0) return NO;
+    int room = n + 64; pid_t *pids = calloc((size_t)room, sizeof *pids);
+    if (!pids) return NO;
+    n = proc_listallpids(pids, room * (int)sizeof *pids);
+    BOOL found = NO; char name[2 * MAXCOMLEN + 1];
+    for (int i = 0; i < n && !found; i++)
+        if (pids[i] != getpid() && proc_name(pids[i], name, sizeof name) > 0 && !strncmp(name, "xcx-native", 10)) found = YES;
+    free(pids);
+    return found;
+}
+static NSString *move_folder(NSString *new, NSString *old) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([fm fileExistsAtPath:new]) {
+        if ([fm fileExistsAtPath:old]) [library_notes addObject:[NSString stringWithFormat:@"%@ left in place: %@ exists and is used", old, new]];
+        return new;
+    }
+    if (![fm fileExistsAtPath:old]) return new;
+    if (game_running()) {
+        [library_notes addObject:[NSString stringWithFormat:@"%@ not moved to %@ while the game runs; using %@ for now", old, new, old]];
+        return old;
+    }
+    const char *why = !make_dir(new.stringByDeletingLastPathComponent) ? "its parent folder cannot be made"
+                    : rename(old.fileSystemRepresentation, new.fileSystemRepresentation) ? strerror(errno) : NULL;
+    if (why) {
+        if ([fm fileExistsAtPath:new] && ![fm fileExistsAtPath:old]) {   // moved meanwhile by build_app.py or another start
+            [library_notes addObject:[NSString stringWithFormat:@"%@ was moved to %@ meanwhile; using it", old, new]];
+            return new;
+        }
+        [library_notes addObject:[NSString stringWithFormat:@"could not move %@ to %@ (%s); using %@ for now", old, new, why, old]];
+        return old;
+    }
+    [library_notes addObject:[NSString stringWithFormat:@"moved %@ to %@", old, new]];
+    return new;
+}
+static void use_library(void) {
+    if (!library_notes) library_notes = [NSMutableArray array];
+    g_data = move_folder(in_home(DATA_FOLDER), in_home(OLD_DATA_FOLDER));
+    g_logs = move_folder(in_home(LOGS_FOLDER), in_home(OLD_LOGS_FOLDER));
+    /* The settings window's choices were saved under the old identifier: taken over while the new one has none. */
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSString *mine = NSBundle.mainBundle.bundleIdentifier;   // nil: a launcher started outside an app
+    NSDictionary *old = [d persistentDomainForName:OLD_BUNDLE_ID];
+    if (mine && ![mine isEqualToString:OLD_BUNDLE_ID] && old.count && ![d persistentDomainForName:mine].count) {
+        [d setPersistentDomain:old forName:mine];
+        [library_notes addObject:[NSString stringWithFormat:@"settings taken over from %@", OLD_BUNDLE_ID]];
+    }
+}
 /* First start: seed the app's profile from the work folder's (user-data: the profile the terminal runs made) by copying,
    so the app continues the same game. Only when the app has no account yet; nothing is ever overwritten, and the
    originals are left as they are. temp/ and cache/ are the runtime's scratch and are not copied. */
@@ -289,15 +360,17 @@ int main(int argc, char **argv) {
             printf("%s: game version %s (%s)\n", ok ? "ok" : "missing game binary or version mismatch", TOTK_GAME_VERSION, TOTK_GAME_DIR);
             return ok ? 0 : 1;
         }
+        use_library();   // before anything reads the data folder (the settings window lists its mods)
         [NSApplication sharedApplication]; NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
         Launcher *l = [Launcher new]; NSApp.delegate = l;
         [NSApp run];
         if (!l.launch) return 0;
+        use_library();   // again: a build (build_app.py) may have moved the folders while the settings window was open
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-        NSString *work = work_folder(), *home = NSHomeDirectory();
+        NSString *work = work_folder();
         BOOL bundled = self_contained();
         NSString *data = data_folder();
-        NSString *logs = [home stringByAppendingPathComponent:@"Library/Logs/MacNativeGames"];
+        NSString *logs = logs_folder();
         NSString *profile = [data stringByAppendingPathComponent:@"profile"], *slot = [data stringByAppendingPathComponent:@"game-slot"];
         /* A self-contained app keeps what the game writes out of its signed bundle (Tears of the Kingdom's app does the
            same): the shader cache in the user's Library, and its own RomFS check record (the record names the image's
@@ -370,6 +443,7 @@ int main(int argc, char **argv) {
         NSString *log = [logs stringByAppendingPathComponent:@"xcx.log"], *prev = [logs stringByAppendingPathComponent:@"xcx.previous.log"];
         [NSFileManager.defaultManager removeItemAtPath:prev error:nil]; [NSFileManager.defaultManager moveItemAtPath:log toPath:prev error:nil];
         FILE *lf = fopen(log.fileSystemRepresentation, "w"); if (lf) { dup2(fileno(lf), STDOUT_FILENO); dup2(fileno(lf), STDERR_FILENO); fclose(lf); }
+        for (NSString *note in library_notes) fprintf(stderr, "[launcher] library: %s\n", note.UTF8String);
         if (!bundled) seed_profile(work, profile);   // after the log is open, so the copy is recorded in it
         { NSString *image = [work stringByAppendingPathComponent:@"extracted/" TOTK_GAME_DIR "/romfs/romfs.bin"];
           fprintf(stderr, "[launcher] %s: game folder %s, RomFS image %s, shader cache %s\n",

@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>XCXBuilder</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.macnativegames.xcx.builder</string>
+	<string>org.xcnative.xcx.builder</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

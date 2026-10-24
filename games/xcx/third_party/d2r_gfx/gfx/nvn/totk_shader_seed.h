@@ -135,7 +135,7 @@ static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NS
         return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @(imported), @"variants": totk_seed_variants(names)};
     }
 fail:
-    if (error) *error = [NSError errorWithDomain:@"MacNativeGames.ShaderSeed" code:1
+    if (error) *error = [NSError errorWithDomain:@"XCNative.ShaderSeed" code:1
         userInfo:@{NSLocalizedDescriptionKey: problem ?: @"Cannot import startup shaders"}];
     return nil;
 }

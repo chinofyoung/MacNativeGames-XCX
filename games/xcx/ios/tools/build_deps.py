@@ -31,7 +31,7 @@ if stamp.is_file() and json.loads(stamp.read_text()) == want and all((out / 'lib
     raise SystemExit(0)
 # libvpx's configure splits its compiler path and flags on spaces: when the folder has one, sources and build trees go
 # under a space-free root instead.
-root = out if ' ' not in str(out) else Path(tempfile.gettempdir()).resolve() / f'macnativegames-ios-deps-{a.sdk}'
+root = out if ' ' not in str(out) else Path(tempfile.gettempdir()).resolve() / f'xcnative-ios-deps-{a.sdk}'
 sdk = subprocess.check_output(['xcrun', '--sdk', a.sdk, '--show-sdk-path'], text=True).strip()
 platform_dir = 'iPhoneOS.platform' if a.sdk == 'iphoneos' else 'iPhoneSimulator.platform'
 src = root / 'src'; build = root / 'build'; src.mkdir(parents=True, exist_ok=True); build.mkdir(exist_ok=True)

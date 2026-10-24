@@ -22,8 +22,10 @@ usage: app_bundle.py dev --app <.app> --launcher <launcher> --work <work folder>
 """
 import argparse
 import json
+import os
 import plistlib
 import shutil
+import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
@@ -34,13 +36,75 @@ VERSIONS = {
 }
 DEFAULT_VERSION = 'v101'                         # the Makefile's VERSION ?= v101
 APP_NAME = 'Xenoblade Chronicles X'
-BUNDLE_ID = 'org.macnativegames.xcx'
+BUNDLE_ID = 'org.xcnative.xcx'
+OLD_BUNDLE_ID = 'org.macnativegames.xcx'         # until 2026-10-24 (ios/tools/install_device.py copies a device's data on)
 EXECUTABLE = APP_NAME                            # Contents/MacOS/<this>
-DATA_FOLDER = 'XCX'                              # ~/Library/Application Support/MacNativeGames/<this>
-PROFILE = f'Library/Application Support/MacNativeGames/{DATA_FOLDER}/profile'   # the saves, under the home folder
+VENDOR = 'XCNative'                              # ~/Library/{Application Support,Logs,Caches}/<this>
+OLD_VENDOR = 'MacNativeGames'                    # the same folders until 2026-10-24 (migrate_library moves them)
+DATA_FOLDER = 'XCX'                              # ~/Library/Application Support/XCNative/<this>
+DATA = f'Library/Application Support/{VENDOR}/{DATA_FOLDER}'   # saves, shader cache, contribution file, under home
+PROFILE = f'{DATA}/profile'                      # the saves
+LOGS = f'Library/Logs/{VENDOR}'                  # xcx.log (app/launcher.m)
+CACHES = f'Library/Caches/{VENDOR}'              # the window's build, signing projects, work folder links
+OLD_DATA = f'Library/Application Support/{OLD_VENDOR}/{DATA_FOLDER}'
+OLD_LOGS = f'Library/Logs/{OLD_VENDOR}'
 GAME_ROOT = 'Contents/Resources/xcx'             # the launcher's game folder in a self-contained app
 APP_BINARY = 'build/xcx-native'                  # the game binary inside a self-contained app (the launcher runs it)
 SHARED_FONTS = 'extracted/firmware/shared-fonts'  # the launcher sets TOTK_SHARED_FONTS to it (runtime/shared_font.c)
+
+
+def game_running():
+    """True while a game process (build/xcx-native*) runs: it writes its saves by the path it was started with, so its
+    data folder is not moved under it."""
+    try:
+        return subprocess.run(['pgrep', '^xcx-native'], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def move_folder(new, old, log=print, running=game_running):
+    """The folder to use, `new` or `old`: when only `old` exists it is renamed to `new` first (once; the same volume, so
+    nothing is copied). Both there: `new` is used and `old` left as it is, nothing merged or replaced. A move that fails
+    (or a game that is running) leaves `old` in place and in use for now, unless another process moved it meanwhile.
+    A broken link counts as nothing there (as for app/launcher.m and the window). log(message) says what happened."""
+    new, old = Path(new), Path(old)
+    if new.exists():
+        if old.exists():
+            log(f'{old} left in place: {new} exists and is used')
+        return new
+    if not old.exists():
+        return new
+    if running():
+        log(f'{old} not moved to {new} while the game runs; using {old} for now')
+        return old
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError as e:
+        if new.exists() and not old.exists():   # moved meanwhile by the app's start or another build
+            log(f'{old} was moved to {new} meanwhile; using it')
+            return new
+        log(f'could not move {old} to {new} ({e}); using {old} for now')
+        return old
+    log(f'moved {old} to {new}')
+    return new
+
+
+def data_folder(home=None):
+    """The data folder in use, without moving anything: ~/Library/Application Support/XCNative/XCX, or the MacNativeGames
+    one while only that exists (migrate_library has not run yet, or could not move it)."""
+    home = Path(home) if home else Path.home()
+    new, old = home / DATA, home / OLD_DATA
+    return old if not new.exists() and old.exists() else new
+
+
+def migrate_library(home=None, log=print, running=game_running):
+    """Move the MacNativeGames data and log folders to XCNative once (move_folder; app/launcher.m does the same when
+    the app starts) and return the data folder to use. The old caches are not moved: they are made again."""
+    home = Path(home) if home else Path.home()
+    data = move_folder(home / DATA, home / OLD_DATA, log, running)
+    move_folder(home / LOGS, home / OLD_LOGS, log, running)
+    return data
 
 
 def check_version(version):

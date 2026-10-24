@@ -17,7 +17,7 @@ The version built is the update's. The game is recognised by the title IDs and v
 naming what the file is and the versions that are supported.
 
 Updating: build again with the newer update to the same output (-o, or the default next to the game file). The app is
-replaced; the saves are not in the app (~/Library/Application Support/MacNativeGames/XCX/profile), so the new version
+replaced; the saves are not in the app (~/Library/Application Support/XCNative/XCX/profile), so the new version
 continues from them. A save that 2.0.0 has loaded and saved may not load in 1.0.1 again: the build says so when it
 replaces an older app and prints the command that backs the profile up. Both versions can be built from one work folder
 (extracted/<v>, rewritten/<v>, build/<v> stay apart), so going back to 1.0.1 is a rebuild that reuses its steps. NCAs of an NSP are
@@ -54,8 +54,10 @@ the game file is; the app goes next to the game file); a second run reuses what 
 needs no work folder once built and may be moved, also to /Applications. --delete-work deletes the work folder after
 a successful build (only a folder build_app.py made; never on a failure or a cancel), so a later build starts from
 scratch (about 8 minutes). Saves, the shader cache, the RomFS check
-record and the log go to the user's Library (~/Library/Application Support/MacNativeGames/XCX,
-~/Library/Logs/MacNativeGames/xcx.log), so the signed app stays read-only. Nothing from the game is in this repository;
+record and the log go to the user's Library (~/Library/Application Support/XCNative/XCX,
+~/Library/Logs/XCNative/xcx.log), so the signed app stays read-only. Folders from before 2026-10-24
+(~/Library/Application Support/MacNativeGames/XCX, ~/Library/Logs/MacNativeGames) are moved there once, by the build
+or the app's first start (app_bundle.migrate_library); the old caches are made again. Nothing from the game is in this repository;
 everything is made from your files on your Mac. Key values are never printed.
 
 Needs: macOS 26 or later on Apple silicon, the Xcode command line tools (Xcode for llvm-objdump), Homebrew with
@@ -72,7 +74,7 @@ and the ones this Mac has translated, and a draw needing a case nobody has share
     python3 build_app.py --gui
 
 opens a window that does the same without the command line (games/xcx/builder: a small SwiftUI app, compiled with
-xcrun swiftc on first use into ~/Library/Caches/MacNativeGames/xcx-builder, and again when its sources change). The
+xcrun swiftc on first use into ~/Library/Caches/XCNative/xcx-builder, and again when its sources change). The
 window runs this script with --progress json: one JSON object a line on stdout (the plan, with the supported versions;
 the start, with the version being built and the version of the app it replaces; the steps, each start and end with its
 time; the error with the step it stopped at; the output), the human output on stderr; SIGTERM then cancels the
@@ -680,7 +682,7 @@ def prerequisites():
 
 
 def make_safe_link(work):
-    return Path.home() / f'Library/Caches/MacNativeGames/xcx-work-{hashlib.sha256(str(work).encode()).hexdigest()[:12]}'
+    return Path.home() / f'{app_bundle.CACHES}/xcx-work-{hashlib.sha256(str(work).encode()).hexdigest()[:12]}'
 
 
 def make_safe(work):
@@ -1068,7 +1070,7 @@ def shader_chain():
 
 def mac_shader_cache():
     """The player's shader cache, where the self-contained app keeps what it translates."""
-    return Path.home() / f'Library/Application Support/MacNativeGames/{app_bundle.DATA_FOLDER}/shader-cache/rt-{shader_chain()}'
+    return app_bundle.data_folder() / f'shader-cache/rt-{shader_chain()}'
 
 
 def no_download(url, timeout):
@@ -1103,7 +1105,7 @@ def pull_ios_contribution():
         import shader_contrib_watch
         problems = []
         added = shader_contrib_watch.pull(device, os.environ.get('XCX_BUNDLE_ID') or app_bundle.BUNDLE_ID,
-                                          report=problems.append)
+                                          store=contribution.mac_file(), report=problems.append)
         say(f'warning: shaders from the iPhone not pulled: {problems[0]}' if problems
             else f'{added} new shaders from the iPhone (shader-list-contribution.txt)')
         return added
@@ -1150,15 +1152,16 @@ def report_contribution(work, device='Mac'):
     window offers to share them (event contribution; device fills in the issue form's Device, None leaves it to the
     player). Nothing when there are none or the file cannot be read."""
     path, _, _ = shader_list_for_build(work, offline=True)   # the list the build cached, else the project's
+    mac_file = contribution.mac_file()
     try:
-        rows = len(contribution.new_rows(contribution.MAC_FILE, path))
+        rows = len(contribution.new_rows(mac_file, path))
     except (OSError, ValueError) as e:
-        say(f'shader list contribution: {contribution.MAC_FILE} cannot be read ({e})')
+        say(f'shader list contribution: {mac_file} cannot be read ({e})')
         return
     if rows:
-        say(f'You found {rows} new shaders the shared list does not have yet ({contribution.MAC_FILE}): sharing them lets '
+        say(f'You found {rows} new shaders the shared list does not have yet ({mac_file}): sharing them lets '
             'everyone\'s next build draw these parts of the game (docs/sharing-shaders.md).')
-        emit('contribution', rows=rows, file=str(contribution.MAC_FILE), url=contribution.issue_url(rows, DISPLAY, device))
+        emit('contribution', rows=rows, file=str(mac_file), url=contribution.issue_url(rows, DISPLAY, device))
 
 
 def place_new(src, dst):
@@ -1651,7 +1654,7 @@ def parse_mode(argv):
 
 # ---- the window (games/xcx/builder) ----
 BUILDER = GAME / 'builder'
-BUILDER_CACHE = Path.home() / 'Library/Caches/MacNativeGames/xcx-builder'
+BUILDER_CACHE = Path.home() / app_bundle.CACHES / 'xcx-builder'
 BUILDER_NAME = 'XCX Builder'
 
 
@@ -1699,6 +1702,13 @@ def open_gui():
     say(f'opened {BUILDER_NAME} ({app})')
 
 
+def use_library():
+    """Before the build reads or writes the user's Library (after the arguments are checked, so --help or a wrong one
+    moves nothing): the MacNativeGames data and log folders moved to XCNative once (app_bundle.migrate_library). The
+    paths in it are resolved at each use (app_bundle.data_folder(), contribution.mac_file())."""
+    return app_bundle.migrate_library(log=lambda m: say(f'Library: {m}'))
+
+
 def main(argv):
     t0 = time.time()
     mode = parse_mode(argv)
@@ -1709,6 +1719,7 @@ def main(argv):
     if mode.check_requirements:
         return 0 if check_requirements(mode.platform) else 1
     args = parse_args(argv)
+    use_library()
     if args.identify:
         return identify_only(args)
     # the version is the update's, known once identify has read the files: the plan lists the supported ones, and the
@@ -1789,7 +1800,7 @@ def check_space(args, out, work):
 
 
 def profile_folder():
-    return Path.home() / app_bundle.PROFILE
+    return app_bundle.data_folder() / 'profile'
 
 
 def has_saves(profile):
@@ -1887,7 +1898,7 @@ def build_all(args, plat, out, work, logs, t0):
     emit('done', platform='macos', out=str(out), work=str(work), seconds=round(total, 1), version=VERSION, display=DISPLAY,
          replaced=dict(version=installed[0], display=installed[1]) if updated else None)
     say('Open it from Finder (it may be moved, also to /Applications). Saves, the shader cache and the log go to '
-        '~/Library/Application Support/MacNativeGames/XCX and ~/Library/Logs/MacNativeGames/xcx.log. The first start '
+        '~/Library/Application Support/XCNative/XCX and ~/Library/Logs/XCNative/xcx.log. The first start '
         'verifies the game data once (about 10 s) and keeps a record; shaders are translated as the game meets them '
         'and cached. The app holds the game: keep it for your own use, never share it.')
     if updated and saves and version_order(VERSION) > version_order(installed[0]):

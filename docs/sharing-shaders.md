@@ -47,7 +47,7 @@ You need a free GitHub account (see the questions at the end). Sharing is one fi
 ### On a Mac
 
 1. Play. The game saves the new shaders it meets in
-   `~/Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt`.
+   `~/Library/Application Support/XCNative/XCX/shader-list-contribution.txt`.
 2. When the file has 50 new shaders, the game asks before it starts: "Share", "Not now" or "Never". After that it asks
    again every 500 more. "Not now" asks again after 500 more new shaders. "Never" stops the questions (the game still
    notes them).
@@ -101,7 +101,7 @@ python3 games/xcx/ios/tools/fill_shaders.py --work XCX_build --device <id> --bun
 - `--work` is the work folder of your build (`XCX_build` in the project's top folder unless you picked another).
 - `<id>` is the phone's id from `xcrun devicectl list devices`.
 - `<bundle id>` is the app's name on the phone. An app you installed with your own Apple ID has your team in it, like
-  `org.macnativegames.xcx.<team>`. The install step prints it. Without the right one the tool cannot find the app.
+  `org.xcnative.xcx.<team>`. The install step prints it. Without the right one the tool cannot find the app.
 
 Restart the game afterwards. It picks up the new shaders when it starts. Later builds include them as well. If you have
 not installed Apple's Metal Toolchain, the tool still works, and the phone prepares the shaders a little later. You can

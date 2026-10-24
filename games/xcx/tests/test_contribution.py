@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0, str(REPO))
+import app_bundle
 import build_app
 import contribution
 from contribution import issue_url, new_rows
@@ -71,16 +72,23 @@ class IssueUrl(unittest.TestCase):
 
 
 class MacFile(unittest.TestCase):
-    def test_mac_file_is_in_application_support(self):
-        self.assertEqual(contribution.MAC_FILE,
-                         Path.home()/'Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt')
+    def test_mac_file_follows_the_data_folder_in_use(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with mock.patch.object(app_bundle.Path, 'home', return_value=home):
+                self.assertEqual(contribution.mac_file(), home/'Library/Application Support/XCNative/XCX/shader-list-contribution.txt')
+                (home/'Library/Application Support/MacNativeGames/XCX').mkdir(parents=True)   # only the old one
+                self.assertEqual(contribution.mac_file(),
+                                 home/'Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt')
+                (home/'Library/Application Support/XCNative/XCX').mkdir(parents=True)          # moved: resolved again
+                self.assertEqual(contribution.mac_file(), home/'Library/Application Support/XCNative/XCX/shader-list-contribution.txt')
 
 
 class BuildReport(unittest.TestCase):
     """build_app.py after a build: the window's contribution event, with the rows the list the build cached lacks."""
     def events(self, work, mac_file, *device):
         out = io.StringIO()
-        with mock.patch.object(contribution, 'MAC_FILE', mac_file), mock.patch.object(build_app, 'EVENTS', out), \
+        with mock.patch.object(contribution, 'mac_file', lambda: mac_file), mock.patch.object(build_app, 'EVENTS', out), \
                 mock.patch.object(build_app, 'DISPLAY', '2.0.0'), mock.patch.object(build_app, 'say'):
             build_app.report_contribution(work, *device)
         return [json.loads(line) for line in out.getvalue().splitlines()]

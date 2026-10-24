@@ -33,3 +33,6 @@ docs/screenshots/
 
 # landing page
 .superpowers/
+
+# Claude Code project notes (local only)
+/CLAUDE.md

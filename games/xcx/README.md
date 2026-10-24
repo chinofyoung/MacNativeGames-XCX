@@ -139,7 +139,7 @@ costs no extra space on the same volume, and it no longer needs the work folder.
 `Contents/Resources/xcx/build/xcx-native` is there (and `XCX_WORK` is not set). Everything the game writes goes to the
 user's Library, so the signed bundle stays read-only:
 
-- the shader cache to `~/Library/Application Support/MacNativeGames/XCX/shader-cache/rt-<chain>` (`XC_SHADER_CACHE`; `TOTK_SHADER_CACHE`,
+- the shader cache to `~/Library/Application Support/XCNative/XCX/shader-cache/rt-<chain>` (`XC_SHADER_CACHE`; `TOTK_SHADER_CACHE`,
   as Tears of the Kingdom's app uses, is still accepted),
 - the RomFS check record to `.../XCX/app-romfs-record/` (the record names the image's file identity; the app's image
   is another file than the work folder's, so the two kinds of app keep separate records instead of replacing each
@@ -151,7 +151,7 @@ game binary is in the app and that its version matches Info.plist, so macOS's fi
 
 **The window (`build_app.py --gui`).** `builder/` holds a small SwiftUI app (`BuilderApp.swift`, `BuildModel.swift`,
 `ContentView.swift`, `TestHook.swift`, `Info.plist`) that `build_app.py --gui` compiles with `xcrun swiftc` (no Xcode
-project) into `~/Library/Caches/MacNativeGames/xcx-builder/<hash>/XCX Builder.app`. The build is ad-hoc signed and
+project) into `~/Library/Caches/XCNative/xcx-builder/<hash>/XCX Builder.app`. The build is ad-hoc signed and
 compiled again only when the sources or the compiler change. The app runs `build_app.py --progress json` (one JSON event
 a line on stdout, the human log on stderr; SIGTERM cancels cleanly), and `--check-requirements --progress json` for
 its prerequisites panel. `TestHook.swift` is for scripted checks only. With `XCX_BUILDER_TEST_*` set, it fills in the
@@ -176,13 +176,21 @@ interpolation off (key 2 still toggles interpolation; on an M1 it costs real fra
 the game: it runs `build/xcx-native-<v>` from the work folder it names in its Info.plist, so the work folder must stay
 where it was when the app was built.
 
-- Progress: `~/Library/Application Support/MacNativeGames/XCX/profile` (account, saves, pseudo device id, pipeline
+- Progress: `~/Library/Application Support/XCNative/XCX/profile` (account, saves, pseudo device id, pipeline
   list), for both kinds of app. On its first start the development app copies them from `$WORK/user-data`, so Continue
   goes on from the terminal runs' save; the originals are not changed. After that the two are separate.
 - Shader cache: `$WORK/build/shader-cache/rt-*`, shared with `make boot`.
-- Log: `~/Library/Logs/MacNativeGames/xcx.log` (both kinds; its `[launcher]` line says which kind ran and where the
+- These folders were `MacNativeGames` ones until 2026-10-24 (`~/Library/Application Support/MacNativeGames/XCX`,
+  `~/Library/Logs/MacNativeGames`): the launcher's first start and `build_app.py` move them once (`use_library` in
+  `app/launcher.m`, `migrate_library` in `scripts/app_bundle.py`). The bundle id is `org.xcnative.xcx` (was
+  `org.macnativegames.xcx`); the launcher takes the old settings over. Rebuild or delete apps built before this
+  change: an older app would write to the MacNativeGames folder again. On an iPhone / iPad the new id is a new app:
+  `ios/tools/install_device.py` copies the old app's saves and settings over once (see the root README). It counts as
+  one more App ID for a free Apple ID (about 10 per 7 days), and the new app needs the 14 GB game data again while the
+  old one keeps its copy: check free space, and delete the old app only after the new one shows your saves.
+- Log: `~/Library/Logs/XCNative/xcx.log` (both kinds; its `[launcher]` line says which kind ran and where the
   RomFS image is). Commands for the running game (`shot <path>.png`, `close`, ...) can be appended to
-  `~/Library/Application Support/MacNativeGames/XCX/input.txt`; `open --env XCX_PLAY=1 <app>` skips the settings window,
+  `~/Library/Application Support/XCNative/XCX/input.txt`; `open --env XCX_PLAY=1 <app>` skips the settings window,
   and `--env TOTK_SLOT_OWNER=<name>` marks a scripted run so that a game the user starts takes the game slot over.
 - Player exefs patches (`make patches VERSION=<v>`: `mods/<1.0.1 | 2.0.0>/<name>/exefs/*.pchtxt`, for that version's
   main build ID, -> `$WORK/patches/<slug>.tsv`) have no

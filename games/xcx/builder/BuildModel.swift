@@ -63,16 +63,36 @@ struct Detected: Equatable {
     var problem = false       // not this game, an unsupported version, or unreadable
 }
 
-/// The saves: per user, not in the app, so replacing the app keeps them.
-let profileFolder = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/MacNativeGames/XCX/profile")
+/// The saves: per user, not in the app, so replacing the app keeps them. In ~/Library/Application Support/XCNative/XCX,
+/// or in the MacNativeGames folder of before 2026-10-24 while only that exists (build_app.py and the app's first start
+/// move it: scripts/app_bundle.py migrate_library).
+var profileFolder: URL {
+    let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+    let data = support.appendingPathComponent("XCNative/XCX"), old = support.appendingPathComponent("MacNativeGames/XCX")
+    let useOld = !FileManager.default.fileExists(atPath: data.path) && FileManager.default.fileExists(atPath: old.path)
+    return (useOld ? old : data).appendingPathComponent("profile")
+}
 let iosWarning = "Experimental: shaders are not pre-translated, so most of the picture is missing. An iPhone or iPad "
     + "cannot translate shaders while playing, and this port does not translate them ahead of time yet. The IPA carries "
     + "only the shader variants this Mac has already translated; every other draw is skipped."
 
 @MainActor
 final class BuildModel: ObservableObject {
-    static let shared = BuildModel()
+    static let shared: BuildModel = {
+        takeOverOldDefaults()
+        return BuildModel()
+    }()
+
+    /// The window's identifier was org.macnativegames.xcx.builder until 2026-10-24: its remembered files and choices
+    /// are taken over while the new identifier has none (not in test mode, which writes nothing).
+    private static func takeOverOldDefaults() {
+        let old = "org.macnativegames.xcx.builder"
+        guard ProcessInfo.processInfo.environment["XCX_BUILDER_TEST_GAME"] == nil,
+              let mine = Bundle.main.bundleIdentifier, mine != old,
+              let previous = UserDefaults.standard.persistentDomain(forName: old), !previous.isEmpty,
+              UserDefaults.standard.persistentDomain(forName: mine)?.isEmpty ?? true else { return }
+        UserDefaults.standard.setPersistentDomain(previous, forName: mine)
+    }
 
     let launch = Launch.fromCommandLine()
     /// Test mode (TestHook): fields come from the environment and nothing is written to UserDefaults.

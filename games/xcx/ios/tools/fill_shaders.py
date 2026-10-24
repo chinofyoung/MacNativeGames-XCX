@@ -7,7 +7,7 @@ prepare every shader found in the game files and the list, docs/sharing-shaders.
 work folder (<work>/build/ios-fill/rt-<chain>), and the next `build_app.py --platform ios` carries them in the app's
 seed. EXPERIMENTAL, like the iOS build. First run against a device on 2026-10-24 (iPhone 15 Pro Max): 201 requests
 translated and pushed, and after a restart the player character was drawn with their outfit. A sideloaded app's bundle
-id has the team suffix (org.macnativegames.xcx.<team id, lowercase>; the install log prints it), so pass it as
+id has the team suffix (org.xcnative.xcx.<team id, lowercase>; the install log prints it), so pass it as
 --bundle-id. Without the Metal Toolchain (xcodebuild -downloadComponent MetalToolchain) the pack has MSL only.
 
 iOS has no shader translator. On a miss the game skips the draws that need the variant and saves the complete request
@@ -126,8 +126,8 @@ def main():
     ap = argparse.ArgumentParser(description='Translate the shaders an iOS device missed and push them back to it.')
     ap.add_argument('--work', type=Path, required=True, help='the work folder of the build (build/shader-service, build/spirv-cross)')
     ap.add_argument('--device', default=os.environ.get('XCX_IOS_DEVICE'), help='devicectl device id (or XCX_IOS_DEVICE)')
-    ap.add_argument('--bundle-id', default=os.environ.get('XCX_BUNDLE_ID', 'org.macnativegames.xcx'),
-                    help='the installed app\'s identifier (install_device.py uses org.macnativegames.xcx.<team id, lowercase>;'
+    ap.add_argument('--bundle-id', default=os.environ.get('XCX_BUNDLE_ID', 'org.xcnative.xcx'),
+                    help='the installed app\'s identifier (install_device.py uses org.xcnative.xcx.<team id, lowercase>;'
                     ' the install log prints it)')
     ap.add_argument('--requests', type=Path, help='use requests already copied from the device instead of pulling them')
     ap.add_argument('--no-push', action='store_true', help='translate and build the pack, but do not send it')

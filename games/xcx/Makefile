@@ -97,7 +97,7 @@ mods:
 # The app: a small launcher bundle (settings window with presets, then the game) that runs the game from the work
 # folder, which it names in Info.plist (XCXWorkFolder): nothing large is copied. Its icon comes from the game's own
 # control data (GAME=<the XCI> KEYS=<prod.keys>), or the app goes without one. The app is built into the work folder,
-# never into this source tree. Saves: ~/Library/Application Support/MacNativeGames/XCX/profile, copied from
+# never into this source tree. Saves: ~/Library/Application Support/XCNative/XCX/profile, copied from
 # <work>/user-data on the first start (app/launcher.m); shader cache: <work>/build/shader-cache, shared with make boot.
 # Info.plist and the bundle layout are scripts/app_bundle.py's, shared with the self-contained app of build_app.py.
 APP_NAME := Xenoblade Chronicles X.app

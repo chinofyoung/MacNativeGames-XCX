@@ -6,6 +6,10 @@ to install the IPA on an iPhone 15 Pro Max with a free Apple ID, 2026-10-23).
 
 A free (Personal Team) Apple ID signs for 7 days, a paid membership for a year: run this again to renew. Reinstalling
 with the same team and bundle identifier keeps the saves and the shader cache (they are in the app's Documents).
+Until 2026-10-24 the identifier was org.macnativegames.xcx(.<team>); iOS treats the new org.xcnative.xcx.<team> as
+another app with empty Documents, so the first install of it copies the old app's saves, shader cache, shader list
+contribution, shader requests and Settings choices over (carry_over; not GameData, which --game-data copies). The old
+app and its data stay on the device: delete the old app yourself once the new one has your saves.
 
   python3 games/xcx/ios/tools/install_device.py "Xenoblade Chronicles X.ipa" --device "<device name>" \
       --game-data <work folder>/extracted/<v101 | v200>/romfs/romfs.bin
@@ -29,7 +33,9 @@ from datetime import timezone
 from pathlib import Path
 
 ENTITLEMENT = 'com.apple.developer.kernel.increased-memory-limit'
-CACHE = Path.home()/'Library/Caches/MacNativeGames/ios-signing'
+CACHE = Path.home()/'Library/Caches/XCNative/ios-signing'
+BUNDLE_PREFIX = 'org.xcnative.xcx'          # + .<team id, lowercase>
+OLD_BUNDLE_PREFIX = 'org.macnativegames.xcx'  # until 2026-10-24
 
 EVENTS = None   # the real stdout with --progress json
 STEP = [None]
@@ -186,13 +192,160 @@ def push_game_data(dev, bundle_id, image):
             print(f'  part {i + 1}/{parts}', flush=True); emit('part', part=i + 1, parts=parts)
         (Path(d)/'romfs.sha256').write_text(sha + '\n'); copy(Path(d)/'romfs.sha256', 'romfs.sha256')
 
+# What the app keeps in its Documents (ios/Sources/main.m) that a reinstall under a new identifier would lose: the saves
+# (TOTK_PROFILE_DIR), the shader cache, the shader list contribution, the shader requests (fill_shaders.py). Not
+# GameData: --game-data copies it from the Mac. The Settings app's choices (language, frame rate) are the app's
+# preferences file, named after its identifier.
+CARRY = ('Documents/save', 'Documents/shader-cache', 'Documents/shader-list-contribution.txt', 'Documents/shader-requests')
+CARRIED = 'Documents/migrated-from.txt'   # written last: the copy is done once
+# not copied over what the new app already has (an install that retries: the player may have changed Settings there)
+KEEP_NEW = ('Documents/shader-cache', 'Documents/shader-list-contribution.txt')
+
+
+def old_bundle_ids(bundle_id):
+    """The identifiers the same app had until 2026-10-24: org.xcnative.xcx.<team> -> org.macnativegames.xcx.<team>, then
+    org.macnativegames.xcx. Another identifier (--bundle-id): none."""
+    if bundle_id != BUNDLE_PREFIX and not bundle_id.startswith(BUNDLE_PREFIX + '.'):
+        return []
+    return list(dict.fromkeys([OLD_BUNDLE_PREFIX + bundle_id[len(BUNDLE_PREFIX):], OLD_BUNDLE_PREFIX]))
+
+
+def container_copy(direction, dev, bundle_id, source, destination):
+    """devicectl device copy from / to an app's data container; what subprocess.run returns (never raises for a
+    failed copy)."""
+    return subprocess.run(['xcrun','devicectl','device','copy',direction,'--device',dev,'--domain-type','appDataContainer',
+                           '--domain-identifier',bundle_id,'--source',str(source),'--destination',str(destination)],
+                          capture_output=True, text=True)
+
+
+def has_files(path):
+    path = Path(path)
+    return path.is_file() or (path.is_dir() and any(p.is_file() for p in path.rglob('*')))
+
+
+NOT_FOUND = ('not found', 'could not be found', 'no such file', 'does not exist', "doesn't exist", 'not exist')
+
+
+def not_found(r):
+    """A devicectl copy that failed only because the item is not there."""
+    text = f'{r.stderr or ""}\n{r.stdout or ""}'.lower()
+    return any(k in text for k in NOT_FOUND)
+
+
+def last_line(r):
+    lines = (r.stderr or r.stdout or '').strip().splitlines()
+    return lines[-1].strip() if lines else 'devicectl failed'
+
+
+def save_by_hand(old, new):
+    return (f'Copy the saves by hand: in Finder select the device > Files, drag the "save" folder out of the app '
+            f'installed as {old} onto the Mac, then drag it onto the app installed as {new} (both are named '
+            '"Xenoblade Chronicles X"; the old one is the one with the saves). Or on the device, Files > On My iPhone: '
+            'copy save from the old app\'s folder into the new one\'s. Keep the old app until the new one shows the saves.')
+
+
+def carry_over(dev, bundle_id, report=None):
+    """After installing `bundle_id`: when the device still has the app under an old identifier (old_bundle_ids), copy its
+    saves, shader cache, contribution, requests and Settings choices (CARRY) to the new app. Only when the new app's
+    save folder is known to be empty (copied and empty, or plainly not there); any other answer skips it. When both old
+    identifiers are installed, the one with saves is used. The saves are checked after the copy (a file read back from
+    the new app); only then is CARRIED written, so a copy that did not complete is tried again at the next install.
+    Nothing on the device is deleted. Best effort: a failure is a warning (report, default: printed), never a stop.
+    Returns the old identifier and the items copied, or None."""
+    report = report or (lambda m: say(f'warning: {m}'))
+    olds = old_bundle_ids(bundle_id)
+    if not olds:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(prefix='xcx-carry-') as tmp:
+            tmp = Path(tmp)
+            if container_copy('from', dev, bundle_id, CARRIED, tmp/'carried').returncode == 0 and (tmp/'carried').is_file():
+                return None   # done at an earlier install
+            mine = tmp/'mine'
+            r = container_copy('from', dev, bundle_id, 'Documents/save', mine)
+            if r.returncode == 0 and has_files(mine):
+                say(f'saves: {bundle_id} has saves of its own, so nothing is copied from the old identifier')
+                return None
+            if r.returncode and not not_found(r):
+                report(f'could not tell whether {bundle_id} has saves ({last_line(r)}), so nothing is copied from the '
+                       f'old identifier. {save_by_hand(" / ".join(olds), bundle_id)}')
+                return None
+            found = {}   # old id -> [(item, destination, local copy)]
+            for old in olds:
+                items = [(item, item) for item in CARRY] + [(f'Library/Preferences/{old}.plist',
+                                                             f'Library/Preferences/{bundle_id}.plist')]
+                got = []
+                for i, (item, dest) in enumerate(items):
+                    local = tmp/old/f'{i}-{Path(item).name}'
+                    local.parent.mkdir(parents=True, exist_ok=True)
+                    if container_copy('from', dev, old, item, local).returncode == 0 and has_files(local):
+                        got.append((item, dest, local))
+                if got:
+                    found[old] = got
+            if not found:
+                return None   # not installed there, or nothing to carry
+            with_saves = [old for old in found if any(item == 'Documents/save' for item, _, _ in found[old])]
+            old = (with_saves or list(found))[0]
+            for other in found:
+                if other != old:
+                    say(f'{other} is on the device too; its data is not copied (it has '
+                        f'{"saves as well" if other in with_saves else "no saves"})')
+            got = found[old]
+            say(f'{old} is still on the device: copying its data to {bundle_id} (the old app keeps its own)')
+            copied, save_local = [], None
+            for n, (item, dest, local) in enumerate(got):
+                if item in KEEP_NEW or item.startswith('Library/Preferences/'):   # a retry: what the new app already has (its own Settings choices) is kept
+                    have = tmp/'have'/str(n)
+                    have.parent.mkdir(exist_ok=True)
+                    if container_copy('from', dev, bundle_id, dest, have).returncode == 0 and has_files(have):
+                        say(f'  kept {dest}: {bundle_id} has it already')
+                        continue
+                r = container_copy('to', dev, bundle_id, local, dest)
+                if r.returncode:
+                    report(f'{item} not copied from {old}: {last_line(r)}')
+                else:
+                    copied.append(item)
+                    say(f'  copied {item}')
+                    if item == 'Documents/save':
+                        save_local = local
+            if save_local is None:
+                if old in with_saves:
+                    report(f'the saves were not copied. {save_by_hand(old, bundle_id)}')
+                return old, copied   # no marker: the next install tries again
+            # read one save file back from the new app: account.uid, else the first file of the copy
+            probe = 'account.uid' if (save_local/'account.uid').is_file() else \
+                next((p.relative_to(save_local).as_posix() for p in sorted(save_local.rglob('*')) if p.is_file()), None)
+            if probe is None:   # the old app's save is not a folder of files
+                report(f'the copied saves could not be checked on {bundle_id} (the old save is not a folder of files). '
+                       f'{save_by_hand(old, bundle_id)}')
+                return old, copied   # no marker
+            back = tmp/'check'/Path(probe).name
+            back.parent.mkdir()
+            r = container_copy('from', dev, bundle_id, f'Documents/save/{probe}', back)
+            if r.returncode or not back.is_file() or back.read_bytes() != (save_local/probe).read_bytes():
+                report(f'the copied saves could not be checked on {bundle_id} (save/{probe} '
+                       f'{"differs" if back.is_file() else "is missing"}). {save_by_hand(old, bundle_id)}')
+                return old, copied   # no marker: the next install tries again
+            say(f'  checked save/{probe} on {bundle_id}')
+            note = tmp/'migrated-from.txt'
+            note.write_text(f'{old}\n' + ''.join(f'{item}\n' for item in copied))
+            if container_copy('to', dev, bundle_id, note, CARRIED).returncode:
+                report(f'{CARRIED} not written (a later install still copies nothing once this app has saves)')
+            say(f'copied {len(copied)} of {len(got)} items from {old}; delete the old app yourself once this one '
+                'shows your saves')
+            return old, copied
+    except (OSError, ValueError, subprocess.SubprocessError) as e:   # ValueError includes UnicodeDecodeError
+        report(f'the data of the app under the old identifier was not copied: {e}')
+    return None
+
+
 def main():
     global EVENTS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('ipa', type=Path, nargs='?', help='the unsigned IPA (or .app folder) from build_app.py --platform ios')
     ap.add_argument('--device', help='device name (as in Finder) or identifier; needed when several are paired')
     ap.add_argument('--team', help='Apple team ID (default: the only team with an Apple Development certificate)')
-    ap.add_argument('--bundle-id', help='default: org.macnativegames.xcx.<team>, so it is free to register on your team')
+    ap.add_argument('--bundle-id', help=f'default: {BUNDLE_PREFIX}.<team>, so it is free to register on your team')
     ap.add_argument('--game-data', type=Path, help='<work folder>/extracted/<v101 | v200>/romfs/romfs.bin (the version the IPA was built for; index.json beside it): copied once to Documents/GameData')
     ap.add_argument('--list-devices', action='store_true', help='list the paired devices and the Apple Development teams, then exit')
     ap.add_argument('--dry-run', action='store_true', help='check everything up to signing, then stop (nothing is signed or installed)')
@@ -229,7 +382,7 @@ def install(a):
     elif len(found) == 1: team = found[0]
     elif found: raise Fail(f'several teams: {", ".join(found)}', 'choose one with --team')
     else: raise Fail('no Apple Development certificate', NO_TEAM)
-    bundle_id = a.bundle_id or f'org.macnativegames.xcx.{team.lower()}'
+    bundle_id = a.bundle_id or f'{BUNDLE_PREFIX}.{team.lower()}'
     dev = pick_device(a.device)
     udid = dev['hardwareProperties']['udid']
     say(f"team {team}, bundle {bundle_id}, device {dev['deviceProperties'].get('name')} ({udid})")
@@ -278,6 +431,7 @@ def install(a):
     step('install')
     say('installing (a few minutes over the cable)')
     run(['xcrun','devicectl','device','install','app','--device',dev['identifier'],app])
+    carry_over(dev['identifier'], bundle_id)
     if a.game_data:
         step('game data')
         push_game_data(dev['identifier'], bundle_id, a.game_data)

@@ -32,7 +32,7 @@ body:
     attributes:
       label: shader-list-contribution.txt
       description: |
-        Drag the file into this box. Mac: `~/Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt`
+        Drag the file into this box. Mac: `~/Library/Application Support/XCNative/XCX/shader-list-contribution.txt`
         (the builder window's Share button opens this page and shows the file in Finder). iPhone / iPad: Files app ›
         On My iPhone (or iPad) › the game's folder (Xenoblade Chronicles X unless you named the app otherwise).
       placeholder: Drop shader-list-contribution.txt here

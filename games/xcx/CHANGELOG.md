@@ -1309,3 +1309,49 @@ preparing. Player guide: `docs/sharing-shaders.md`.
 - **Bugs fixed along the way:** `compile_seed.py` temp names raced when two compiles ran at once; `build_ipa.py` wrote
   its seed stamp before the compile finished, so a failed compile looked done on the next run.
 - Not done: the list's pipelines (phase 2), and a run of the workflow on a live issue.
+
+### 2026-10-24: XCNative folders and bundle ID
+
+The project's own name replaces MacNativeGames in the player's Library and in the bundle ids. Credits and links to the
+original MacNativeGames project, and the entries above, are unchanged.
+
+- **Folders:** `~/Library/Application Support/MacNativeGames/XCX` -> `~/Library/Application Support/XCNative/XCX`
+  (profile and saves, shader cache, `shader-list-contribution.txt`, `app-romfs-record/`, `game-slot/`, `input.txt`),
+  `~/Library/Logs/MacNativeGames` -> `~/Library/Logs/XCNative`, and the caches (`xcx-builder`, `ios-signing`,
+  `xcx-work-*`) now in `~/Library/Caches/XCNative`.
+- **Migration, once:** the launcher at start (`use_library` in `app/launcher.m`, before the settings window reads the
+  data folder) and `build_app.py` before it touches the Library (`app_bundle.migrate_library`) apply the same rules.
+  Only the old folder exists: it is renamed to the new place (same volume, nothing copied) and one line is logged.
+  Both exist: the new one is used and the old one left untouched, nothing merged or replaced, and that is logged. The
+  move fails, or a game process (`xcx-native*`) is running (it writes its saves by the path it started with): the old
+  folder stays in use for that run and is logged; the next start tries again. Nothing is deleted. The old caches are
+  not moved; they are made again. The builder window shows the old profile path while only that exists. The other
+  tools (`contribution.py`, `shader_contrib_watch.py`) use the old folder too while only it exists, so they never
+  create an empty new folder that would hide the saves. They resolve the folder at each use. The launcher looks again
+  after its settings window closes (a build may have moved the folders meanwhile); a rename that fails because another
+  process moved the folder first uses the new one. A broken link at the new path counts as nothing there, for the
+  launcher, the Python side and the window alike. `build_app.py` moves only after its arguments are checked (`--help`
+  or a wrong one moves nothing). Rebuild or delete apps built before this change: an older app would write to the
+  MacNativeGames folder again.
+- **Bundle ids:** `org.macnativegames.xcx` -> `org.xcnative.xcx` (Mac app, iOS project, `fill_shaders.py` and
+  `shader_contrib_watch.py` defaults), sideloaded `org.xcnative.xcx.<team id, lowercase>` (`install_device.py`), the
+  window `org.xcnative.xcx.builder`. The launcher and the window take over their saved settings from the old id while
+  the new one has none.
+- **iPhone / iPad:** a new bundle id is a new app with an empty sandbox. After installing the new id,
+  `install_device.py` (`carry_over`) looks for the old app (`org.macnativegames.xcx.<team>`, then
+  `org.macnativegames.xcx`) and copies its `Documents/save`, `shader-cache`, `shader-list-contribution.txt`,
+  `shader-requests` and its Settings preferences file to the new app with `devicectl device copy from/to
+  --domain-type appDataContainer`; not GameData (`--game-data` pushes it from the Mac). It copies only when the new
+  app's `Documents/save` came back empty or plainly not found; any other answer skips with a warning. When both old ids
+  are installed, the one with saves is used and the other is named in the log. After the copy it reads a save file
+  (`account.uid`, else the first file) back from the new app and compares it. Only then does it write
+  `Documents/migrated-from.txt`, so a copy that did not complete or check out is tried again at the next install, with
+  a warning that says how to copy `save` by hand (Finder or the Files app). Each item is logged, and a failed copy is a
+  warning. The old app and its data are never deleted. The new id counts as one more App ID for a free Apple ID (about
+  10 per 7 days), and the new app needs the 14 GB game data again while the old one keeps its copy: check free space,
+  and delete the old app only after the new one shows the saves.
+- **Checked:** `python3.14 -m unittest discover -s games/xcx/tests` (new `test_library_migration.py`: only old ->
+  moved; both -> new used, old untouched; move failure or a running game -> old used; the device carry-over against a
+  faked devicectl); the launcher's `move_folder` in a harness on temporary folders (the same four cases, and a fake
+  `xcx-native-v101` process detected); `make launcher` with `-Werror` for both versions; the window compiled with
+  build_app.py's `swiftc` command; `make runtime`. Not run against the owner's Library or a device.
