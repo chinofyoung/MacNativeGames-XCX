@@ -25,6 +25,13 @@ static NSString *totk_seed_fingerprint(NSDictionary *m, NSArray<NSString *> *nam
     return totk_seed_hash([s dataUsingEncoding:NSUTF8StringEncoding]);
 }
 
+// The variants a seed or fill pack carries: one "<shader>-<12 hex>_b.metal" per variant (the phone's shader box counts them).
+static NSSet<NSString *> *totk_seed_variants(NSArray<NSString *> *names) {
+    NSMutableSet<NSString *> *v = [NSMutableSet set];
+    for (NSString *n in names) if ([n hasSuffix:@"_b.metal"]) [v addObject:[n substringToIndex:n.length - 8]];
+    return v;
+}
+
 // Progress of a running import, pass 0 checking the source, pass 1 copying it (tens of thousands of files: minutes on a
 // phone); set by the runtime (totk_shader_rt.m), nil in tests.
 static void (*totk_seed_progress)(int pass, NSUInteger done, NSUInteger total);
@@ -55,7 +62,7 @@ static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NS
             }
             if (![fm fileExistsAtPath:[cache stringByAppendingPathComponent:name]]) installed = NO;
         }
-        if (installed) return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @0};
+        if (installed) return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @0, @"variants": totk_seed_variants(names)};
         // Validate the complete source before changing any existing cache entry.
         NSUInteger checked = 0;
         for (NSString *name in names) {
@@ -125,7 +132,7 @@ static NSDictionary *totk_seed_import_into(NSString *source, NSString *cache, NS
         }
         NSData *receipt = [NSJSONSerialization dataWithJSONObject:@{@"files_sha256": fingerprint} options:0 error:error];
         if (marker && (!receipt || ![receipt writeToFile:marker options:NSDataWritingAtomic error:error])) return nil;
-        return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @(imported)};
+        return @{@"available": @YES, @"shaders": m[@"shaders"], @"imported_files": @(imported), @"variants": totk_seed_variants(names)};
     }
 fail:
     if (error) *error = [NSError errorWithDomain:@"MacNativeGames.ShaderSeed" code:1
@@ -144,14 +151,15 @@ static NSDictionary *totk_fill_import(NSString *root, NSString *cache) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSArray<NSString *> *packs = [[fm contentsOfDirectoryAtPath:root error:nil] ?: @[] sortedArrayUsingSelector:@selector(compare:)];
     NSUInteger merged = 0, imported = 0; NSMutableArray<NSString *> *rejected = [NSMutableArray array];
+    NSMutableSet<NSString *> *variants = [NSMutableSet set];   // the variants the merged packs carried
     for (NSString *name in packs) {
         NSString *pack = [root stringByAppendingPathComponent:name]; BOOL dir = NO;
         if (![fm fileExistsAtPath:pack isDirectory:&dir] || !dir) continue;
         NSError *error = nil;
         NSDictionary *r = totk_seed_import_into(pack, cache, nil, &error);
-        if (r && [r[@"available"] boolValue]) { merged++; imported += [r[@"imported_files"] unsignedIntegerValue]; }
+        if (r && [r[@"available"] boolValue]) { merged++; imported += [r[@"imported_files"] unsignedIntegerValue]; [variants unionSet:r[@"variants"]]; }
         else [rejected addObject:[NSString stringWithFormat:@"%@: %@", name, error ? error.localizedDescription : @"no manifest"]];
         [fm removeItemAtPath:pack error:nil];
     }
-    return @{@"packs": @(merged), @"imported_files": @(imported), @"rejected": rejected};
+    return @{@"packs": @(merged), @"imported_files": @(imported), @"rejected": rejected, @"variants": variants};
 }

@@ -12,3 +12,8 @@ NSString *totk_rt_variant(NSString *shader, int stage, const uint8_t *control, c
 /* Variants new to the translation cache this run, the variants in the cache (-1 until counted in the background) and
    the CLOCK_UPTIME_RAW time of the last new one (0: none yet). Any pointer may be NULL. */
 void totk_rt_counts(uint64_t *fresh, int64_t *total, uint64_t *last_new_ns);
+/* The phone's box (nvn_mtl.m shader_overlay_prepare): the variants the app's shader seed carries plus
+   those merged fill packs added, distinct (-1: neither), the
+   distinct variants missed this run (iOS: draws skipped, request recorded) and the CLOCK_UPTIME_RAW time of the last miss
+   (0: none). Atomics only, safe on the present thread. Any pointer may be NULL. */
+void totk_rt_seed_counts(int64_t *seed_total, uint64_t *missing, uint64_t *last_miss_ns);

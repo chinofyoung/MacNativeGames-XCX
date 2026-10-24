@@ -42,6 +42,10 @@ static uint64_t g_translated;
    and the variants in the cache (counted once in the background, plus the new ones since). */
 static _Atomic uint64_t g_new_variants, g_new_variant_ns, g_new_at_count;
 static _Atomic int64_t g_cached_variants = -1;
+/* The phone's box (2026-10-24): variants the app's seed carries plus those fill packs added (counted at import; -1: neither) and the distinct
+   variants missed this run (draws skipped, request in shader-requests/), with the time of the last miss. */
+static _Atomic int64_t g_seed_variants = -1;
+static _Atomic uint64_t g_missed_variants, g_missed_ns;
 
 static NSString *root_dir(void) {   // native-port/ (the executable lives in native-port/build/)
     if (g_root) return g_root;
@@ -60,6 +64,7 @@ NSString *totk_rt_dir(void) {
         g_dir = e ? @(e) : [root_dir() stringByAppendingFormat:@"/build/shader-cache/rt-%s", DMSH_CHAIN];
 #endif
         [NSFileManager.defaultManager createDirectoryAtPath:g_dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSSet<NSString *> *seedSet = nil; NSUInteger fillCount = 0;   // the phone's box: variants in the seed / added by fill packs
         const char *seedMode = getenv("TOTK_SHADER_SEED");
         if (!(seedMode && !strcmp(seedMode, "off"))) {
             NSError *error = nil;
@@ -78,6 +83,7 @@ NSString *totk_rt_dir(void) {
                 seed = @{@"available": @NO, @"failed": @YES};
             }
             if ([seed[@"available"] boolValue]) {
+                seedSet = seed[@"variants"];
                 unsigned long long imported=[seed[@"imported_files"] unsignedLongLongValue];
                 LOG("[shader-seed] 发现随 App 准备的着色器 %llu 个，导入 %llu 个文件；首次启动即可预热",
                     [seed[@"shaders"] unsignedLongLongValue], imported);
@@ -92,7 +98,26 @@ NSString *totk_rt_dir(void) {
         if ([fill[@"packs"] unsignedIntegerValue]) LOG("[shader-fill] 合并 Mac 补译的着色器包 %lu 个，导入 %lu 个文件",
             (unsigned long)[fill[@"packs"] unsignedIntegerValue], (unsigned long)[fill[@"imported_files"] unsignedIntegerValue]);
         for (NSString *why in fill[@"rejected"]) LOG("【红】[shader-fill] 丢弃不完整的着色器包 %s（请在 Mac 上重新运行 fill_shaders.py）", why.UTF8String);
+        /* 补译包合并后即删，所以把它们带来的变体记在缓存里的 fill-variants.txt（跨次启动累计、去重），左下框总数 = 种子 + 其中不在种子里的。
+           A merged pack is deleted, so the variants packs brought are kept in fill-variants.txt in the cache (accumulated
+           over starts, distinct); the box's total is the seed plus those of them the seed does not carry (2026-10-24). */
+        NSString *ledger = [g_dir stringByAppendingPathComponent:@"fill-variants.txt"];
+        NSMutableSet<NSString *> *filled = [NSMutableSet set];
+        NSRegularExpression *vname = [NSRegularExpression regularExpressionWithPattern:@"^[0-9a-f]{64}-[0-9a-f]{12}$" options:0 error:nil];
+        for (NSString *raw in [([NSString stringWithContentsOfFile:ledger encoding:NSUTF8StringEncoding error:nil] ?: @"") componentsSeparatedByString:@"\n"]) {
+            NSString *l = [raw stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r"]];
+            if ([vname numberOfMatchesInString:l options:0 range:NSMakeRange(0, l.length)]) [filled addObject:l];   // only variant names; anything else is dropped
+        }
+        NSUInteger known = filled.count; [filled unionSet:fill[@"variants"] ?: [NSSet set]];
+        NSError *werr = nil;
+        if (filled.count != known && ![[[filled.allObjects sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"\n"]
+                                       writeToFile:ledger atomically:YES encoding:NSUTF8StringEncoding error:&werr])
+            LOG("【红】[shader-fill] 写不了 %s：%s（左下框的总数下次启动会少算这些补译变体）", ledger.UTF8String,
+                werr ? werr.localizedDescription.UTF8String : "unknown error");
+        if (seedSet) [filled minusSet:seedSet];
+        fillCount = filled.count;
 #endif
+        if (seedSet.count || fillCount) atomic_store(&g_seed_variants, (int64_t)(seedSet.count + fillCount));
     });
     return g_dir;
 }
@@ -223,6 +248,7 @@ NSString *totk_rt_variant(NSString *shader, int stage, const uint8_t *control, c
     static NSMutableSet<NSString *> *missed; if (!missed) missed = [NSMutableSet set];
     if (![missed containsObject:variant]) {
         [missed addObject:variant];
+        atomic_store(&g_missed_variants, missed.count); atomic_store(&g_missed_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));   // the phone's box reads these (present thread: atomics only)
         [[json_string(rq) dataUsingEncoding:NSUTF8StringEncoding] writeToFile:[NSString stringWithFormat:@"shader-requests/%@.json", variant] atomically:YES];
         totk_contrib_add(shader, answers);   // not in the prepared seed, so not in the shared shader list yet
         LOG("[shader-miss] %s %s 不在手机的翻译缓存里：跳过用到它的绘制，请求已存 shader-requests/（第 %lu 个；在 Mac 上 ios/tools/fill_shaders.py 补上后下次启动预热）",
@@ -276,4 +302,10 @@ void totk_rt_counts(uint64_t *fresh, int64_t *total, uint64_t *last_new_ns) {
     if (fresh) *fresh = f;
     if (total) *total = t < 0 ? -1 : t + (int64_t)(f - atomic_load(&g_new_at_count));
     if (last_new_ns) *last_new_ns = atomic_load(&g_new_variant_ns);
+}
+
+void totk_rt_seed_counts(int64_t *seed_total, uint64_t *missing, uint64_t *last_miss_ns) {
+    if (seed_total) *seed_total = atomic_load(&g_seed_variants);
+    if (missing) *missing = atomic_load(&g_missed_variants);
+    if (last_miss_ns) *last_miss_ns = atomic_load(&g_missed_ns);
 }

@@ -197,7 +197,7 @@ int hud_snapshot(int line, char *out, size_t n, int *highlight) {
 int shader_overlay_enabled(void) {
     static int on = -1;
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-    const int def = 0;   // the phone translates nothing (misses go to shader-requests/)
+    const int def = 1;   // 2026-10-24: the phone shows its own line (shader_overlay_ready_text); it translates nothing (misses go to shader-requests/)
 #else
     const int def = 1;
 #endif
@@ -210,6 +210,20 @@ void shader_overlay_text(char *out, size_t n, uint64_t fresh, int64_t total, uin
     (void)pipelines;   // user 2026-10-17: the pipeline count is not shown
     if (total < 0) snprintf(t, sizeof t, "--"); else snprintf(t, sizeof t, "%lld", (long long)(total > 999999 ? 999999 : total));
     snprintf(out, n, TOTK_UI("新着色器 %llu / 总计 %s", "New shaders %llu / total %s"), (unsigned long long)(fresh > 99999 ? 99999 : fresh), t);
+}
+
+/* 12400 -> "12,400" (the iPhone line's counts). */
+static void thousands(char *out, size_t n, uint64_t v) {
+    char d[24]; int k = snprintf(d, sizeof d, "%llu", (unsigned long long)v), j = 0;
+    for (int i = 0; i < k && (size_t)j + 1 < n; i++) { if (i && (k - i) % 3 == 0 && (size_t)j + 2 < n) out[j++] = ','; out[j++] = d[i]; }
+    if (n) out[j < (int)n ? j : (int)n - 1] = 0;
+}
+// 手机左下框：已就绪 / 种子里带的变体数，本次运行缺的变体数 | The phone's bottom-left box: variants ready / carried in the seed, variants missed this run
+void shader_overlay_ready_text(char *out, size_t n, uint64_t ready, int64_t total, uint64_t missing) {
+    char r[24], t[24], m[24];
+    thousands(r, sizeof r, ready > 9999999 ? 9999999 : ready); thousands(m, sizeof m, missing > 999999 ? 999999 : missing);
+    if (total < 0) snprintf(t, sizeof t, "--"); else thousands(t, sizeof t, (uint64_t)(total > 9999999 ? 9999999 : total));
+    snprintf(out, n, TOTK_UI("着色器 %s / %s  缺 %s", "Shaders %s / %s   missing %s"), r, t, m);
 }
 
 /* A count's rate, re-measured every half second (game presents; interpolated frames shown). stale_s > 0: a gap longer

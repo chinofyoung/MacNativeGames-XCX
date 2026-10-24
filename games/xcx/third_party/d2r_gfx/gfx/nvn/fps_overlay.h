@@ -40,9 +40,12 @@ enum { LOAD_OVERLAY_TEX_W = 2048 };   // the widest line (every value 100%) at s
 int fps_overlay_has_glyph(char c);
 int fps_overlay_line_pixel_font(const char *text);   // 0: the line has a character the pixel font lacks (drawn with CoreText)
 /* TOTK automatic shader collection, bottom-left box (2026-10-16 night): "SHADER +<new>/<in the cache> PSO +<new pipelines>",
-   yellow for 3 s after something new was collected. TOTK_SHADER_OVERLAY=0 hides it (default on on the Mac, off on iOS). */
+   yellow for 3 s after something new was collected. TOTK_SHADER_OVERLAY=0 hides it (default on; iOS shows shader_overlay_ready_text instead). */
 int shader_overlay_enabled(void);
 void shader_overlay_text(char *out, size_t n, uint64_t fresh, int64_t total, uint64_t pipelines);   /* total < 0: "--" (not counted yet) */
+/* iOS (2026-10-24): "Shaders 12,400 / 13,962   missing 3" -- variants ready to draw this run / variants the app carries in its
+   shader seed plus those merged fill packs added (total < 0: "--", no seed) / variants missed this run (draws skipped), yellow for 3 s after a new miss. */
+void shader_overlay_ready_text(char *out, size_t n, uint64_t ready, int64_t total, uint64_t missing);
 /* Record that the game's present number `ticket` reached the screen at now_s (seconds). The rate of game presents is
    re-measured every half second; fps_overlay_value() returns it, or -1 before the first measurement. */
 void fps_overlay_note(uint64_t ticket, double now_s);

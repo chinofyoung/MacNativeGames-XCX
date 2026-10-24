@@ -112,7 +112,7 @@ static struct { char text[96]; int scale; } g_load_key[4];
 static id<MTLTexture> g_shd_tex[4];
 static id<MTLBuffer> g_shd_uv[3];
 static int g_shd_box[4][2];
-static struct { char text[48]; int hl, scale; } g_shd_key[4];
+static struct { char text[64]; int hl, scale; uint64_t at; } g_shd_key[4];   // the phone's line: up to ~45 bytes (UTF-8 Chinese); at: last re-raster (ns)
 int g_bloom_q = -1;   // 泛光 1/4 起点（非 static：真机同进程交替直接改 0 / 1） | Bloom 1/4 starting point (non-static: real-device same-process alternation sets it to 0 / 1 directly)
 static id<MTL4ArgumentTable> g_bloomq_args;
 static id<MTLBuffer> g_bloomq_const[3];
@@ -5000,6 +5000,20 @@ static int drv_scan(NvShader *o, NSString *src) {   // src: the full MSL (iOS do
     return nunfill;
 }
 static _Atomic uint64_t g_rt_prebuilt, g_rt_compiled;   // TOTK: translated variants loaded precompiled (iOS) / compiled from MSL here (atomic: the warm-up loads on several threads)
+/* 已就绪的翻译变体（去重）：库、入口函数和反射都成了，可以画。iPhone 左下框的“就绪”数。
+   Translated variants ready to draw, each counted once: library, entry function and reflection all made (shader_load
+   succeeded). The ready count of the phone's bottom-left box: g_rt_prebuilt / g_rt_compiled count loads (a variant the
+   warm-up and a draw both loaded counts twice; a failed on-device compile counts too), g_warm_library_count only the
+   warm-up's attempts. */
+static _Atomic uint64_t g_rt_ready;
+static NSMutableSet<NSString *> *g_rt_ready_set;
+static os_unfair_lock g_rt_ready_lock = OS_UNFAIR_LOCK_INIT;
+static void rt_ready_note(NSString *pc) {
+    os_unfair_lock_lock(&g_rt_ready_lock);
+    if (!g_rt_ready_set) g_rt_ready_set = [NSMutableSet set];
+    if (![g_rt_ready_set containsObject:pc]) { [g_rt_ready_set addObject:pc]; atomic_fetch_add(&g_rt_ready, 1); }
+    os_unfair_lock_unlock(&g_rt_ready_lock);
+}
 #if !TARGET_OS_IPHONE
 /* TOTK: the startup shaders compiled when the app was built (build_app.py step_shader_libs), named by the SHA-256 of their
    MSL, so only an exact match is used. Metal's own cache of libraries compiled here does not follow the app to a folder
@@ -5067,6 +5081,7 @@ static NvShader *shader_load(NSString *pc, int stage) {
             MDIE("着色器 %s 参数块布局异常：encodedLength=%lu maxAid=%d", o->key, (unsigned long)o->arg_len, max_aid);
     }
     if (o->rf.has_c1) c1_store(o, full);
+    if (rt) rt_ready_note(pc);
     return o;
 }
 
@@ -11812,17 +11827,32 @@ static int shader_overlay_prepare(int slot, MTLViewport vp, MTLViewport *ovp, fl
     if (!fps_overlay_hints_enabled() || !shader_overlay_enabled() || slot < 0 || slot > 3 || !g_shd_tex[slot]) return 0;
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     static uint8_t px[FPS_OVERLAY_TEX_W * FPS_OVERLAY_TEX_H * 4];
+#if TARGET_OS_IPHONE
+    /* 手机（2026-10-24）：“着色器 就绪 / 种子总数  缺 N”，新缺一个后黄 3 秒；出图线程只读原子量（种子总数导入时就记下，不扫目录）。
+       The phone (2026-10-24): "Shaders <ready> / <in the seed + fill packs>   missing <n>", yellow for 3 s after a new miss;
+       the present thread only reads atomics (the total is counted at import from the manifests, no directory scan). */
+    int64_t total = -1; uint64_t missing = 0, newest = 0; totk_rt_seed_counts(&total, &missing, &newest);
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    char text[sizeof g_shd_key[0].text]; shader_overlay_ready_text(text, sizeof text, atomic_load(&g_rt_ready), total, missing);
+#else
     uint64_t fresh = 0, last = 0; int64_t total = -1; totk_rt_counts(&fresh, &total, &last);
     uint64_t pso = atomic_load(&g_collect_new[1]) + atomic_load(&g_collect_new[2]), plast = atomic_load(&g_collect_last_ns);
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), newest = last > plast ? last : plast;
     char text[48]; shader_overlay_text(text, sizeof text, fresh, total, pso);
+#endif
     int hl = newest && now - newest < 3000000000ull, scale = fps_overlay_scale(vp.height);
     if (hud_compact()) { hud_publish(HUD_SHADER, text, hl); return 0; }
+#if TARGET_OS_IPHONE
+    const uint64_t min_gap = 250000000ull;   // 预热时“就绪”几乎每帧都变：新数字最多每秒重画 4 次，其间沿用上一张 | ready changes almost every frame in the warm-up: a new count re-rasterises at most 4 times a second, the last texture stays meanwhile
+#else
+    const uint64_t min_gap = 0;
+#endif
     pthread_mutex_lock(&mu);
-    if (g_shd_key[slot].scale != scale || g_shd_key[slot].hl != hl || strcmp(g_shd_key[slot].text, text)) {
+    if (g_shd_key[slot].scale != scale || g_shd_key[slot].hl != hl ||
+        (strcmp(g_shd_key[slot].text, text) && now - g_shd_key[slot].at >= min_gap)) {
         fps_overlay_raster_line(text, hl, scale, px, &g_shd_box[slot][0], &g_shd_box[slot][1]);
         [g_shd_tex[slot] replaceRegion:MTLRegionMake2D(0, 0, FPS_OVERLAY_TEX_W, FPS_OVERLAY_TEX_H) mipmapLevel:0 withBytes:px bytesPerRow:FPS_OVERLAY_TEX_W * 4];
-        snprintf(g_shd_key[slot].text, sizeof g_shd_key[slot].text, "%s", text); g_shd_key[slot].hl = hl; g_shd_key[slot].scale = scale;
+        snprintf(g_shd_key[slot].text, sizeof g_shd_key[slot].text, "%s", text); g_shd_key[slot].hl = hl; g_shd_key[slot].scale = scale; g_shd_key[slot].at = now;
     }
     float bw = g_shd_box[slot][0], bh = g_shd_box[slot][1], W = FPS_OVERLAY_TEX_W, H = FPS_OVERLAY_TEX_H;
     pthread_mutex_unlock(&mu);
