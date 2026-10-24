@@ -12,9 +12,10 @@ gen_embed.py, runtime/loader.c), the RomFS index, the six shared fonts and a sha
 in the IPA: the player installs it once into the app's Documents/GameData (install_device.py --game-data, or Finder's
 file sharing), as the original project's latest iOS build does (--ios-game-data documents there).
 
-Shaders: an iPhone or iPad cannot translate shaders at run time (no translator process), and this port has no up-front
-shader translation yet. The seed holds the variants the Mac has already translated (--seed-cache folders, read only),
-which may be none; any other draw is skipped, so most of the picture is missing.
+Shaders: an iPhone or iPad cannot translate shaders at run time (no translator process), so build_app.py translates them
+up front (step "shaders: prepare": every shader found in the player's game files and the shared list). The seed holds
+those variants and the ones the Mac has already translated (--seed-cache folders, read only); a draw whose variant is in
+neither is skipped until the shared list or fill_shaders.py brings it.
 
 There is no iOS Simulator build: the graphics layer is Metal 4 (MTL4CommandQueue and the rest), which the iPhoneSimulator
 SDK does not have (Xcode 26.6: MTLDevice there has no newMTL4CommandQueue), and MetalFX is missing there too.
@@ -25,6 +26,7 @@ usage: build_ipa.py --work <work folder> --out <X.ipa | X.app> --logs <folder>
 import argparse, hashlib, json, os, plistlib, re, shutil, subprocess, sys
 from pathlib import Path
 from xcode_dir import developer_dir
+import compile_seed   # the device library flags and the Metal toolchain check
 
 TOOLS = Path(__file__).resolve().parent
 IOS = TOOLS.parent
@@ -74,12 +76,28 @@ def sha256(path):
 
 
 # ---- the shader seed ----
-def collect_seed(caches, seed, log):
+def seed_compiled(seed, sdk):
+    """Whether the seed holds the device libraries compile_seed.py would make now: compiled with its current flags, or
+    left as MSL source ('none') only while this Mac has no Metal toolchain."""
+    try:
+        flags = json.loads((seed / 'seed-manifest.json').read_text()).get('ios_metal_flags')
+    except (OSError, ValueError, AttributeError):
+        return False
+    return flags == ' '.join(compile_seed.METAL_FLAGS) or (flags == 'none' and compile_seed.metal_version(sdk) is None)
+
+
+def record_seed(seed, stamp):
+    """Mark the seed as made from these files, once compile_seed.py has finished with it (collect_seed reuses it then)."""
+    seed.with_name(seed.name + '.json').write_text(json.dumps({'stamp': stamp}))
+
+
+def collect_seed(caches, seed, log, sdk):
     """The variants already translated on this Mac, in the startup-seed format the runtime imports (totk_shader_seed.h):
     <variant>_b.metal / _b.json for each variant, and per shader a <shader>.variants index of the rows whose files are
     there. Read only from the caches (files are cloned or copied out of them). Variants the runtime would regenerate on a
     Mac (MSL with doubles or unsupported GLSL.std.450 calls) are left out: an iPhone cannot regenerate them. Returns the
-    number of variants (0: no seed, the app then carries none)."""
+    number of variants (0: no seed, the app then carries none), whether the seed was made again (it then needs
+    compile_seed.py) and its stamp, for record_seed once that has succeeded."""
     ch = chain()
     rows, source = {}, {}   # shader -> {variant: row}; file name -> path
     for cache in caches:
@@ -104,17 +122,19 @@ def collect_seed(caches, seed, log):
                 rows.setdefault(index.stem, {})[v] = {'variant': v, 'deps': row['deps']}
                 source[msl.name], source[refl.name] = msl, refl
     count = sum(len(v) for v in rows.values())
-    # Reuse the seed when it was made from the same files (names, sizes, times) and the same rows
+    # Reuse the seed when it was made from the same files (names, sizes, times) and the same rows and compiled (a compile
+    # that failed or never finished left no record, so the seed is made and compiled again)
     stamp = hashlib.sha256(json.dumps([ch, sorted((n, p.stat().st_size, p.stat().st_mtime_ns) for n, p in source.items()),
                                        {s: sorted(r) for s, r in sorted(rows.items())}]).encode()).hexdigest()
     recorded = seed.with_name(seed.name + '.json')
-    if count and (seed / 'seed-manifest.json').is_file() and recorded.is_file() and json.loads(recorded.read_text()).get('stamp') == stamp:
-        return count, False
+    if count and (seed / 'seed-manifest.json').is_file() and recorded.is_file() and \
+            json.loads(recorded.read_text()).get('stamp') == stamp and seed_compiled(seed, sdk):
+        return count, False, stamp
     if seed.exists(): shutil.rmtree(seed)
     recorded.unlink(missing_ok=True)
     if not count:
         log.write_text('no translated shader variants in ' + ', '.join(map(str, caches)) + '\n')
-        return 0, True
+        return 0, True, stamp
     seed.mkdir(parents=True)
     for name, path in source.items(): clone(path, seed / name)
     for shader, rs in rows.items():
@@ -124,8 +144,7 @@ def collect_seed(caches, seed, log):
     (seed / 'seed-manifest.json').write_text(json.dumps({'schema': 1, 'chain': ch, 'shaders': count, 'files': files,
                                                          'source': 'shader variants translated on the Mac'}, indent=2) + '\n')
     log.write_text(f'{count} variants of {len(rows)} shaders from ' + ', '.join(map(str, caches)) + '\n')
-    recorded.write_text(json.dumps({'stamp': stamp}))
-    return count, True
+    return count, True, stamp
 
 
 def main():
@@ -180,9 +199,10 @@ def main():
 
     # 4. The shader seed: what the Mac has translated so far (read only), compiled for the device when the Metal toolchain is there.
     seed = work / f'build/ios-seed/{a.sdk}/shader-seed'
-    count, fresh = collect_seed(a.seed_cache, seed, logs / 'ios-seed.log')
+    count, fresh, stamp = collect_seed(a.seed_cache, seed, logs / 'ios-seed.log', a.sdk)
     if count and fresh:
         run([sys.executable, TOOLS / 'compile_seed.py', seed, a.sdk], work, logs / f'ios-shaders-{a.sdk}.log', env)
+        record_seed(seed, stamp)
     seed_note = (logs / f'ios-shaders-{a.sdk}.log').read_text().strip().splitlines()[-1:] if count and (logs / f'ios-shaders-{a.sdk}.log').is_file() else []
     print(f'shader seed: {count} variants' + (f' ({seed_note[0]})' if seed_note else '') if count else
           'shader seed: none (no translated variants on this Mac yet)', flush=True)

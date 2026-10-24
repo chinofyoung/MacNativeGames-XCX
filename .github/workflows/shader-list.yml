@@ -1,0 +1,181 @@
+# Adds the shaders players share in "Shader list: ..." issues to games/xcx/assets/shader_list.tsv
+# (games/xcx/scripts/process_shader_issue.py), and takes an issue's rows out again when run by hand (Run workflow, issue).
+#
+# Anyone can open an issue, so nothing from it is trusted: the issue text is read only by the script, from the event
+# file GitHub writes ($GITHUB_EVENT_PATH). No github.event expression is written into a script below; the few values that
+# are needed (issue number, author id) come in through env and are checked to be numbers before use. Nothing from the
+# issue is checked out or run, and the commit may only touch the list, its log and the per-issue records.
+name: Shader list
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Undo: the issue number whose shaders to take out of the shared list'
+        required: true
+        type: number
+
+permissions: {}
+
+jobs:
+  add:
+    if: >-
+      github.event_name == 'issues'
+      && !github.event.issue.pull_request
+      && !contains(github.event.issue.labels.*.name, 'shader-list-undone')
+      && (startsWith(github.event.issue.title, 'Shader list:') || contains(github.event.issue.labels.*.name, 'shader-list'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # one run at a time per issue (a newer edit waits for the running one); different issues run side by side and
+    # meet only at the push, which retries from the newest main
+    concurrency:
+      group: shader-list-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Look up when the author's account was made
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR_ID: ${{ github.event.issue.user.id }}
+        run: |
+          [[ "$AUTHOR_ID" =~ ^[0-9]+$ ]] || { echo "author id is not a number"; exit 1; }
+          gh api "user/$AUTHOR_ID" --jq .created_at > "$RUNNER_TEMP/author_created"
+      - name: Test the shader list tools
+        working-directory: games/xcx/tests
+        run: python3 -B -m unittest test_shader_list test_process_shader_issue test_fetch_shader_list test_contribution
+      - name: Add the issue's shaders to the list
+        id: add
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "issue number is not a number"; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          allowed='^games/xcx/assets/(shader_list\.tsv|shader_list_log\.tsv|shader_list_issues/[0-9]+\.tsv)$'
+          pushed=
+          for attempt in 1 2 3 4 5; do
+            [ "$attempt" = 1 ] || sleep $((RANDOM % 9 + 2))   # 2-10 s, so runs that collided do not collide again
+            # each try starts from the newest main and runs the whole decision again (the script is idempotent)
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            : > "$RUNNER_TEMP/outputs"
+            python3 -I -B games/xcx/scripts/process_shader_issue.py --event "$GITHUB_EVENT_PATH" \
+              --author-created "$(cat "$RUNNER_TEMP/author_created")" \
+              --out-comment "$RUNNER_TEMP/comment.md" --github-output "$RUNNER_TEMP/outputs"
+            added=$(sed -n 's/^added=\([0-9][0-9]*\)$/\1/p' "$RUNNER_TEMP/outputs")
+            login=$(sed -n 's/^login=\([A-Za-z0-9-][A-Za-z0-9-]*\)$/\1/p' "$RUNNER_TEMP/outputs")
+            if [ "${added:-0}" = 0 ]; then pushed=nothing; break; fi
+            if git status --porcelain --untracked-files=all | cut -c4- | grep -Ev "$allowed"; then
+              echo "the script changed files it may not touch"; exit 1
+            fi
+            git add -A games/xcx/assets/shader_list.tsv games/xcx/assets/shader_list_log.tsv games/xcx/assets/shader_list_issues
+            git commit --quiet -m "shader list: $added shaders from #$ISSUE (@${login:--})"
+            # an undo started while this run was deciding labels the issue first: then nothing is pushed or said
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/labels" --jq '.[].name') \
+              || { echo "could not read the issue's labels"; exit 1; }
+            if printf '%s\n' "$labels" | grep -qx 'shader-list-undone'; then
+              echo "undone=yes" >> "$GITHUB_OUTPUT"
+              echo "the issue was undone meanwhile: its shaders are not added"; exit 0
+            fi
+            if git push --quiet origin HEAD:main; then pushed=yes; break; fi
+          done
+          if [ -z "$pushed" ]; then
+            echo "push_failed=yes" >> "$GITHUB_OUTPUT"
+            echo "could not push to main after 5 tries"; exit 1
+          fi
+          cat "$RUNNER_TEMP/outputs" >> "$GITHUB_OUTPUT"
+      - name: Reply on the issue
+        if: steps.add.outputs.undone != 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          CLOSE: ${{ steps.add.outputs.close }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || exit 1
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+          case "$CLOSE" in
+            completed) gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason completed ;;
+            not_planned) gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason 'not planned' ;;
+            *) ;;   # daily_limit: stays open, to be sent again tomorrow
+          esac
+      - name: Ask to try again when the list could not be saved
+        if: failure() && steps.add.outputs.push_failed == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          BUSY: >-
+            Thanks! We couldn't save this right now because several people shared at once.
+            Edit this issue (any small change) to try again.
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || exit 1
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$BUSY"
+          exit 1
+      - name: Say something went wrong
+        if: failure() && steps.add.outputs.push_failed != 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          BROKEN: >-
+            Thanks! Something went wrong while checking this. The maintainer has been notified by the failed run;
+            you can edit this issue to try again.
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || exit 1
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$BROKEN"
+
+  undo:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: shader-list-undo
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      # first, so an edit made while the rows are being taken out does not start a run that adds them again
+      - name: Mark the issue so edits to it are not added again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || exit 1
+          gh label create shader-list-undone --repo "$GITHUB_REPOSITORY" --color B60205 \
+            --description 'Shader list rows taken out again; the workflow ignores this issue' --force
+          gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label shader-list-undone
+      - name: Take the issue's shaders out of the list
+        env:
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "issue number is not a number"; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          pushed=
+          for attempt in 1 2 3 4 5; do
+            [ "$attempt" = 1 ] || sleep $((RANDOM % 9 + 2))
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            python3 -I -B games/xcx/scripts/process_shader_issue.py --undo "$ISSUE"
+            if [ -z "$(git status --porcelain)" ]; then pushed=nothing; break; fi
+            git add -A games/xcx/assets/shader_list.tsv games/xcx/assets/shader_list_issues
+            git commit --quiet -m "shader list: undo #$ISSUE"
+            if git push --quiet origin HEAD:main; then pushed=yes; break; fi
+          done
+          [ -n "$pushed" ] || { echo "could not push to main after 5 tries"; exit 1; }

@@ -209,9 +209,21 @@ build").
 Stage 4 and 5 are in progress; the changelog's Status table is kept current. Not checked yet: cities (New Los Angeles),
 Skells, cutscenes, day-time lighting, water, menus beyond character creation, and a New Game with the current
 build. Then: the rest of the online SDK's offline answers as the game reaches them, a resolution patch (the settings window has no such setting until it
-exists), a startup
-shader seed with Metal cache warm-up for the app, and up-front shader translation, which the iPhone / iPad build needs
-to draw.
+exists), and a Metal cache warm-up for the app.
+
+Up-front shader translation is done (2026-10-24): builds prepare every shader found in the player's game files and the
+shared list (`docs/sharing-shaders.md` at the repository root is the player guide). Open: the list's pipelines
+(phase 2: `R`, `B`, `S`, `C` rows are parsed but not produced or used yet), and a real test issue on GitHub, since the
+workflow was only tested with the unit tests and has not run on a live issue.
+
+### Maintainer setup for the shared list
+
+Once, in the repository: Settings › Actions › General › Workflow permissions: Read and write permissions. If `main` is
+protected, allow `github-actions[bot]` to push to it. Create the label `shader-list` (Issues › Labels; the issue form
+applies it, and GitHub drops a label that does not exist) and `shader-list-undone` (an undo also creates it, but making
+it up front is simpler). Nothing is needed per submission: `.github/workflows/shader-list.yml`
+runs on every "Shader list:" issue, adds the rows through `scripts/process_shader_issue.py`, comments and closes. To undo
+an issue: Actions › Shader list › Run workflow, with the issue number; it takes out the rows that issue added.
 
 ## 60 fps (experimental)
 

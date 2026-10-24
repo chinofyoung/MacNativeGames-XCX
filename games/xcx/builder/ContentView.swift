@@ -390,11 +390,19 @@ struct ResultView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Text("The app holds the game: keep it for your own use and never share it.")
                     .font(.caption).foregroundStyle(.secondary)
+                if let contribution = model.contribution {
+                    Text("You found \(contribution.rows) new shaders. Sharing them lets everyone's next build draw these "
+                         + "parts of the game: Share opens a GitHub form and shows the file to attach in Finder.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     if out.hasSuffix(".app") {
                         Button("Open App") { model.openApp(out) }.buttonStyle(.borderedProminent)
                     }
                     Button("Show in Finder") { model.showInFinder(out) }
+                    if let contribution = model.contribution {
+                        Button("Share \(contribution.rows) new shaders") { model.shareContribution() }
+                    }
                 }
             }
             .padding(.vertical, 4)

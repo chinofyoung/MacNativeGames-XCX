@@ -30,10 +30,13 @@
    (MacNativeGames/XCX/profile). On the first start without one it is seeded by COPYING <work>/user-data (the profile the
    terminal runs use), so Continue loads the same save; the originals are never moved or changed (development apps
    only: a self-contained app has no work folder). A development app's shader cache stays where the runtime keeps it,
-   next to the binary (<work>/build/shader-cache/rt-*), so it and make boot share it. */
+   next to the binary (<work>/build/shader-cache/rt-*), so it and make boot share it.
+   Shaders the shared shader list lacks: the game notes them in <data>/shader-list-contribution.txt (TOTK_SHADER_CONTRIB);
+   before the game starts the launcher asks, at 50 and then every 500 more, to share the file (contrib_reminder). */
 #import <Cocoa/Cocoa.h>
 #include "dmsh_chain.h"      /* DMSH_CHAIN: the shader cache's name (third_party/d2r_gfx/gfx/nvn) */
 #include "game_version.h"    /* TOTK_GAME_VERSION, TOTK_GAME_DIR (runtime/) */
+#include "totk_shader_contrib.h"   /* the shared shader list contribution and its reminder (third_party/d2r_gfx/gfx/nvn) */
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -251,6 +254,29 @@ static void seed_profile(NSString *work, NSString *profile) {
     }
 }
 
+/* The shaders this Mac's game met that the shared shader list does not have yet (totk_shader_contrib.h), before the game
+   starts: first at TOTK_CONTRIB_FIRST rows, then every TOTK_CONTRIB_STEP more, ask the player to share the file. Share
+   opens the shader-list issue form and shows the file in Finder to attach; Not now waits for the next threshold; Never
+   stops the reminders (the game still notes the shaders). What happened, for the log. */
+static const char *contrib_reminder(NSString *path) {
+    NSUInteger rows = totk_contrib_due(path);
+    if (!rows) return "not due";
+    totk_contrib_reminded(path, rows);   // Not now (and Share): the next reminder TOTK_CONTRIB_STEP rows later
+    [NSApp activateIgnoringOtherApps:YES];
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = [NSString stringWithFormat:T("Encontraste %lu shaders nuevos. Si los compartes, la próxima app que cada jugador cree dibujará estas partes del juego. ¿Compartir ahora?",
+                                                     TOTK_CONTRIB_PROMPT), (unsigned long)rows];
+    [alert addButtonWithTitle:T("Compartir", TOTK_CONTRIB_SHARE)];
+    [alert addButtonWithTitle:T("Ahora no", TOTK_CONTRIB_NOT_NOW)];
+    [alert addButtonWithTitle:T("Nunca", TOTK_CONTRIB_NEVER)];
+    NSModalResponse choice = [alert runModal];
+    if (choice == NSAlertThirdButtonReturn) { totk_contrib_never(path); return "never"; }
+    if (choice != NSAlertFirstButtonReturn) return "not now";
+    [NSWorkspace.sharedWorkspace openURL:totk_contrib_issue_url(rows, @TOTK_GAME_VERSION, @"Mac")];
+    [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
+    return "share";
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         /* --check (build_app.py, once after packaging): only look that the game is in the app and of the version
@@ -330,6 +356,12 @@ int main(int argc, char **argv) {
         setenv("DM_PRESENT_LINK_FALLBACK", "1", 1);   // keep presenting when macOS pauses the display link for a window it thinks covered
         setenv("TOTK_SLOT_OWNER", "user", 0); setenv("TOTK_SLOT_PURPOSE", "player", 0);   // a scripted check may name itself (open --env)
         unsetenv("TOTK_HEADLESS");
+        /* The shaders the shared list lacks are noted here (totk_shader_contrib.h); TOTK_SHADER_CONTRIB from the
+           environment wins. */
+        const char *contrib_env = getenv("TOTK_SHADER_CONTRIB");
+        NSString *contrib = contrib_env && *contrib_env ? @(contrib_env) : [data stringByAppendingPathComponent:@"shader-list-contribution.txt"];
+        setenv("TOTK_SHADER_CONTRIB", contrib.fileSystemRepresentation, 1);
+        const char *reminder = contrib_reminder(contrib);
         { NSString *cmds = [data stringByAppendingPathComponent:@"input.txt"]; FILE *cf = fopen(cmds.fileSystemRepresentation, "w"); if (cf) fclose(cf);
           setenv("TOTK_INPUT_FILE", cmds.fileSystemRepresentation, 1); }   // echo "shot ~/Desktop/shot.png" >> it
 
@@ -344,6 +376,8 @@ int main(int argc, char **argv) {
                   bundled ? cache.UTF8String : "next to the game binary (build/shader-cache)"); }
         fprintf(stderr, "[launcher] game version %s (%s)\n", TOTK_GAME_VERSION, TOTK_GAME_DIR);
         fprintf(stderr, "[launcher] frame rate %d (%s)\n", fps60 ? 60 : 30, fr && *fr ? "XCX_FRAME_RATE" : "setting");
+        fprintf(stderr, "[launcher] shader list contribution %s (%lu rows, reminder: %s)\n", contrib.UTF8String,
+                (unsigned long)totk_contrib_read(contrib).count, reminder);
         fprintf(stderr, "[launcher] work %s, patches %s, present %s Hz, display %s, fullscreen %s, window %s, drawable scale %s, MetalFX %s, mod %s\n",
                 work.UTF8String, getenv("XCX_PATCHES") ?: "none", getenv("DM_PRESENT_HZ"), getenv("XCX_DISPLAY"), full ? "yes" : "no", getenv("TOTK_WINDOW_SIZE"),
                 getenv("TOTK_DRAWABLE_SCALE") ?: "1", getenv("TOTK_MFX_OUTPUT") ? "on" : "off", getenv("TOTK_ROMFS_MODS"));

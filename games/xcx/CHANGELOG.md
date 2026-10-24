@@ -1285,3 +1285,27 @@ device.
   pass `--bundle-id` (or `XCX_BUNDLE_ID`). `xcrun devicectl list devices` gives the `--device` id.
 - Without Apple's Metal Toolchain the tool still works, but the pack has MSL source only, which the device compiles at
   start. `xcodebuild -downloadComponent MetalToolchain` installs it, and `--with-done` rebuilds the packs already sent.
+
+### 2026-10-24: shared shader list
+
+The iPhone cannot translate shaders while it plays, so the IPA used to carry only what the Mac had met. Builds now find
+every shader in the player's own game files, and a list of identifiers shared by players says which setups are worth
+preparing. Player guide: `docs/sharing-shaders.md`.
+
+- **List:** `assets/shader_list.tsv` holds identifiers only (shader keys, canonical deps, flags), never game data;
+  185 rows were seeded from the Mac's caches and the 201 variants of the first device run. `build_app.py` downloads the
+  newest one (`scripts/fetch_shader_list.py`: validated, cached, then the cached copy, then the project's; `--offline`
+  skips the download).
+- **Build step `shaders: prepare`** (`scripts/prepare_shader_seed.py`): the inventory found 12,429 shaders in 6,818 files
+  in 18 s; preparing 12,427 took 61.8 s; an unchanged rebuild reuses them in 0.8 s. The IPA carried 13,962 variants and
+  grew from 86 to 159 MiB.
+- **Sharing:** the game notes new shaders in `shader-list-contribution.txt` (Mac: Application Support; iPhone:
+  Documents). The launcher asks at 50 new and then every 500; the builder window offers "Share N new shaders"; with
+  `XCX_IOS_DEVICE` set an iOS build copies the phone's file to the Mac (`ios/tools/shader_contrib_watch.py pull`).
+- **Workflow** (`.github/workflows/shader-list.yml`, `scripts/process_shader_issue.py`): issue text is read only by the
+  script, never run; it may only touch the list, its log and per-issue records. Rules: account at least 7 days old;
+  one accepted share per account per UTC day; at most 2,000 new shaders per share; an issue adds only on the day it was
+  first added. One command undoes an issue (Run workflow with its number).
+- **Bugs fixed along the way:** `compile_seed.py` temp names raced when two compiles ran at once; `build_ipa.py` wrote
+  its seed stamp before the compile finished, so a failed compile looked done on the next run.
+- Not done: the list's pipelines (phase 2), and a run of the workflow on a live issue.

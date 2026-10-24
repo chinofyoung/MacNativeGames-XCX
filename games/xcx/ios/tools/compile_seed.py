@@ -9,7 +9,7 @@ is slower but draws the same.
 
 usage: compile_seed.py <seed folder> <sdk: iphoneos | iphonesimulator>
 """
-import concurrent.futures, hashlib, json, os, shutil, subprocess, sys
+import concurrent.futures, hashlib, json, os, shutil, subprocess, sys, threading
 from pathlib import Path
 
 # The options of totk_precise_opts() in nvn_mtl.m: the translated shaders need exactly rounded float arithmetic. The
@@ -52,7 +52,8 @@ def main():
             air.unlink(missing_ok=True); return None
         subprocess.run(['xcrun','-sdk',sdk,'metallib',str(air),'-o',str(lib)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         air.unlink()
-        tmp=cache/(key+f'.{os.getpid()}.tmp'); shutil.copyfile(lib,tmp); os.replace(tmp,kept)
+        # one temp file per thread: variants with the same source share the key and may finish at the same time
+        tmp=cache/(key+f'.{os.getpid()}.{threading.get_ident()}.tmp'); shutil.copyfile(lib,tmp); os.replace(tmp,kept)
     return lib.name,hashlib.sha256(lib.read_bytes()).hexdigest()
   results=[]; failed=0
   with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,os.cpu_count() or 4)) as pool:

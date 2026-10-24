@@ -1,8 +1,8 @@
 // The builder's state: the chosen files (remembered in UserDefaults), what they are (build_app.py --identify: the
 // game file's base and update version, the update NSP's version), the version of the app at the output (its
 // Info.plist), the requirement check, and the build, which is build_app.py run with --progress json. Its stdout carries
-// one JSON event a line (plan, step, start, done, error, cancelled, work-deleted; requirement and requirements for
-// --check-requirements; identified for --identify), its stderr the human log. Only paths are passed
+// one JSON event a line (plan, step, start, contribution, done, error, cancelled, work-deleted; requirement and
+// requirements for --check-requirements; identified for --identify), its stderr the human log. Only paths are passed
 // to it; key files are never read here, and build_app.py never prints key values.
 import AppKit
 import Foundation
@@ -112,6 +112,8 @@ final class BuildModel: ObservableObject {
     }
     /// The last build deleted its work folder (the work-deleted event).
     @Published private(set) var workDeleted = false
+    /// The shaders this Mac's game met that the shared list lacks (build_app.py's contribution event), to share.
+    @Published private(set) var contribution: (rows: Int, file: String, url: String)?
 
     private var process: Process?
     private var checkProcess: Process?
@@ -398,6 +400,7 @@ final class BuildModel: ObservableObject {
         steps = []
         log = ""
         workDeleted = false
+        contribution = nil
         building = nil
         lastErrorLines = []
         stdoutBuffer = Data()
@@ -499,6 +502,10 @@ final class BuildModel: ObservableObject {
             lastBuilt = event["version"] as? String
         case "work-deleted":
             workDeleted = true
+        case "contribution":
+            if let rows = event["rows"] as? Int, rows > 0, let file = event["file"] as? String, let url = event["url"] as? String {
+                contribution = (rows, file, url)
+            }
         case "done":
             refreshInstalled()
             setPhase(.done(out: event["out"] as? String ?? output?.path ?? ""))
@@ -549,6 +556,12 @@ final class BuildModel: ObservableObject {
 
     func openApp(_ path: String) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
     func showInFinder(_ path: String) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+    /// Share: the shader-list issue form, and the contribution file in Finder to attach to it.
+    func shareContribution() {
+        guard let contribution, let url = URL(string: contribution.url) else { return }
+        NSWorkspace.shared.open(url)
+        showInFinder(contribution.file)
+    }
 
     func acceptLegal() {
         legalAccepted = true

@@ -39,7 +39,9 @@ or, re-signed by a dump tool, once the code modules match; shared fonts by a ver
      scripts/prepare_runtime.py)
   5. runtime: the game binary of that version (make runtime VERSION=<v>)
   6. shader tools: the prebuilt shader translator, checked against its SHA-256, and SPIRV-Cross at its pinned commit,
-     compiled with clang (make shader-tools)
+     compiled with clang (make shader-tools); then every shader of the game translated ahead for its usual case and
+     the cases the shared shader list names (games/xcx/scripts/prepare_shader_seed.py, docs/sharing-shaders.md; the
+     list downloaded from GitHub and cached, or with --offline the cached or the project's one)
   7. app: the launcher and the icon from the game's own control data (make launcher icon), then a self-contained app:
      the code, fonts and RomFS index cloned into it, the RomFS image as a data bundle signed once in the work folder and
      cloned into Contents/Helpers (APFS clones: no extra space on the same volume), ad-hoc signed, registered, and run
@@ -64,8 +66,8 @@ Chronicles X.ipa"): steps 1-6 as above (the Mac runtime exports the patched code
 games/xcx/ios/tools/build_ipa.py: device Opus / libvpx (CMake, network once), the Xcode project (xcodegen), the build,
 and the IPA. It needs Xcode 26 or later with the iOS SDK, xcodegen and CMake (brew install xcodegen cmake). The IPA
 carries no game image: the 14.3 GB RomFS is installed once into the app's Documents (ios/tools/install_device.py
---game-data, or Finder's file sharing). Shaders are not translated ahead of time yet and a phone cannot translate them,
-so only the variants this Mac has already translated are carried and most of the picture is missing.
+--game-data, or Finder's file sharing). A phone cannot translate shaders: the IPA carries the shaders prepared in step 6
+and the ones this Mac has translated, and a draw needing a case nobody has shared yet is skipped.
 
     python3 build_app.py --gui
 
@@ -88,6 +90,7 @@ import json
 import os
 import platform
 import plistlib
+import re
 import shutil
 import signal
 import struct
@@ -101,6 +104,9 @@ REPO = Path(__file__).resolve().parent
 GAME = REPO / 'games/xcx'
 sys.path.insert(0, str(GAME / 'scripts'))
 import app_bundle   # noqa: E402  standard library only: the app's name, Info.plist and the files it carries
+import contribution   # noqa: E402  standard library only: the shaders this Mac's game met that the shared list lacks
+import fetch_shader_list   # noqa: E402  standard library only: the newest shared shader list, cached
+from shader_list import ShaderList   # noqa: E402
 
 PINS = {v: app_bundle.expected(v) for v in app_bundle.VERSIONS}   # games/xcx/assets/expected-<display>.json
 BASE_TITLE = PINS[app_bundle.DEFAULT_VERSION]['title_id']          # 0100453019AA8000 (the same in every version)
@@ -1047,6 +1053,176 @@ class Build:
             t['built'] = [file_stamp(p) if p.is_file() else None for p in paths] != before
 
 
+# ---- the shaders, prepared ahead (games/xcx/scripts/prepare_shader_seed.py, docs/sharing-shaders.md) ----
+SHADER_LIST_REPO = fetch_shader_list.REPO_COPY   # games/xcx/assets/shader_list.tsv
+SHADER_LIST_ORIGINS = dict(downloaded='downloaded', cached='cached', repo='in the project')
+# The runtime's shader cache files (totk_shader_seed.h): a variant's MSL and reflection, and a shader's index of variants
+SHADER_CACHE_FILE = re.compile(r'^(?:[0-9a-f]{64}\.variants|[0-9a-f]{64}-[0-9a-f]{12}_b\.(?:metal|json))$')
+
+
+def shader_chain():
+    """The translation chain the runtime names its shader cache folder after (rt-<chain>)."""
+    return next(line.split('"')[1] for line in (GAME / 'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text().splitlines()
+                if line.startswith('#define DMSH_CHAIN'))
+
+
+def mac_shader_cache():
+    """The player's shader cache, where the self-contained app keeps what it translates."""
+    return Path.home() / f'Library/Application Support/MacNativeGames/{app_bundle.DATA_FOLDER}/shader-cache/rt-{shader_chain()}'
+
+
+def no_download(url, timeout):
+    raise OSError('--offline')
+
+
+def shader_list_for_build(work, offline=False, opener=None):
+    """The shared shader list to prepare from: (path, origin, rows). The newest one from GitHub, cached in
+    <work>/build/shader-list; else the one an earlier build cached; else the project's (fetch_shader_list.py). offline:
+    no download. path is None when there is no list, an empty one or one that cannot be read: the default bind states
+    only."""
+    path, origin = fetch_shader_list.fetch_list(work / 'build/shader-list', SHADER_LIST_REPO,
+                                                **(dict(opener=no_download) if offline else
+                                                   dict(opener=opener) if opener else {}))
+    try:
+        rows = len(ShaderList.load(path).rows()) if Path(path).is_file() else 0
+    except (OSError, ValueError) as e:
+        say(f'shader list: {path} cannot be read ({e}); preparing the usual case of each shader only')
+        return None, origin, 0
+    return (Path(path) if rows else None), origin, rows
+
+
+def pull_ios_contribution():
+    """--platform ios with XCX_IOS_DEVICE set: bring the shaders the device met that the list lacks into this Mac's
+    contribution file, so the build and the window's share offer count them. Never fails the build: one warning line.
+    Returns how many rows it brought."""
+    device = os.environ.get('XCX_IOS_DEVICE')
+    if not device:
+        return 0
+    try:
+        sys.path.insert(0, str(GAME / 'ios/tools'))
+        import shader_contrib_watch
+        problems = []
+        added = shader_contrib_watch.pull(device, os.environ.get('XCX_BUNDLE_ID') or app_bundle.BUNDLE_ID,
+                                          report=problems.append)
+        say(f'warning: shaders from the iPhone not pulled: {problems[0]}' if problems
+            else f'{added} new shaders from the iPhone (shader-list-contribution.txt)')
+        return added
+    except Exception as e:   # noqa: BLE001  a device that is away is no reason to stop a build
+        say(f'warning: shaders from the iPhone not pulled: {e}')
+        return 0
+
+
+def step_shader_prep(work, logs, py, offline=False):
+    """Every shader of the version's RomFS translated for its usual bind state, and for the ones the shared list names
+    for it, into <work>/build/shader-prep/rt-<chain> (prepare_shader_seed.py; about a minute the first time, then only
+    what changed). The IPA carries them and the Mac's shader cache gets the ones it lacks. Returns that folder, or None
+    when the preparation fails: that is not a build failure, the build then carries only the shaders this Mac has
+    translated, as before. A translation that failed stays failed (rt-<chain>.translations) until the translator
+    changes."""
+    prep = work / f'build/shader-prep/rt-{shader_chain()}'
+    log = logs / 'shader-prep.log'
+    with timed('shaders: prepare') as t:
+        path, origin, rows = shader_list_for_build(work, offline)
+        say(f'shader list: {SHADER_LIST_ORIGINS[origin]} ({rows} rows)')
+        say('6/7 shaders: every shader of the game translated ahead, with the cases the shared list names '
+            '(prepare_shader_seed.py; about a minute the first time)')
+        try:
+            run([py, GAME / 'scripts/prepare_shader_seed.py', '--romfs', work / f'extracted/{VERSION}', '--output', prep,
+                 '--translator', work / 'build/shader-service/totk_xlate',
+                 '--spirv-cross', work / 'build/spirv-cross/spirv-cross', '--version', VERSION,
+                 *(['--list', path] if path else [])], log, cwd=GAME)
+        except BuildError as e:
+            lines = log.read_text(errors='replace').splitlines() if log.is_file() else []
+            errors = [line.removeprefix('ERROR: ') for line in lines if line.startswith('ERROR: ')]
+            say(f'shaders: preparation failed ({errors[-1] if errors else str(e).splitlines()[0]}); this build carries '
+                f'only the shaders this Mac already translated (full output: {log})')
+            t['built'] = 'failed'
+            return None
+        summary = [line for line in log.read_text(errors='replace').splitlines() if line.startswith('shader prep:')]
+        if summary:
+            say(f'6/7 {summary[-1]}')
+        t['built'] = not (summary and summary[-1].endswith(', reused'))
+    return prep if prep.is_dir() else None
+
+
+def report_contribution(work, device='Mac'):
+    """After a build: the rows of this Mac's contribution file (contribution.py) that the list the build used lacks; the
+    window offers to share them (event contribution; device fills in the issue form's Device, None leaves it to the
+    player). Nothing when there are none or the file cannot be read."""
+    path, _, _ = shader_list_for_build(work, offline=True)   # the list the build cached, else the project's
+    try:
+        rows = len(contribution.new_rows(contribution.MAC_FILE, path))
+    except (OSError, ValueError) as e:
+        say(f'shader list contribution: {contribution.MAC_FILE} cannot be read ({e})')
+        return
+    if rows:
+        say(f'You found {rows} new shaders the shared list does not have yet ({contribution.MAC_FILE}): sharing them lets '
+            'everyone\'s next build draw these parts of the game (docs/sharing-shaders.md).')
+        emit('contribution', rows=rows, file=str(contribution.MAC_FILE), url=contribution.issue_url(rows, DISPLAY, device))
+
+
+def place_new(src, dst):
+    """src at dst unless dst exists, never replacing it (the game may write dst meanwhile); True when placed."""
+    tmp = dst.with_name(f'{dst.name}.{os.getpid()}.tmp')
+    tmp.unlink(missing_ok=True)
+    try:   # a failed copy (a full disk) leaves no temp file in the player's cache
+        if not clonefile(src, tmp):
+            shutil.copy2(src, tmp)
+        os.link(tmp, dst)   # fails if dst is there; never replaces it
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def copy_prepared_shaders(prep, cache, missed=None):
+    """Merge the prepared shaders into the Mac's shader cache: for each prepared shader index, the variants the cache's
+    index of that shader lacks (by variant name) are added after its own entries, which stay as they are and in their
+    order; their files are copied first, never replacing one, then the index is written whole and put in place in one
+    step. An index of the cache that cannot be read, or that changes meanwhile (the game running), is left alone (and its
+    name appended to missed, when given). Returns the number of variants added."""
+    cache.mkdir(parents=True, exist_ok=True)
+    new = 0
+    for src in sorted(prep.glob('*.variants')):
+        if not SHADER_CACHE_FILE.match(src.name):
+            continue
+        dst = cache / src.name
+        try:
+            rows = json.loads(src.read_text())
+            before = dst.stat().st_mtime_ns if dst.exists() else None
+            have = json.loads(dst.read_text()) if before is not None else []
+        except (OSError, ValueError):
+            if missed is not None:
+                missed.append(src.name)
+            continue
+        if not isinstance(rows, list) or not isinstance(have, list):
+            if missed is not None:
+                missed.append(src.name)
+            continue
+        known = {r.get('variant') for r in have if isinstance(r, dict)}
+        add = [r for r in rows if isinstance(r, dict) and isinstance(r.get('variant'), str) and r['variant'] not in known
+               and SHADER_CACHE_FILE.match(r['variant'] + '_b.metal')
+               and all((prep / f"{r['variant']}{end}").is_file() for end in ('_b.metal', '_b.json'))]
+        if not add:
+            continue
+        for r in add:   # the files before the index that names them, as the runtime's seed import writes them
+            for end in ('_b.metal', '_b.json'):
+                place_new(prep / f"{r['variant']}{end}", cache / f"{r['variant']}{end}")
+        tmp = dst.with_name(f'{dst.name}.{os.getpid()}.tmp')
+        try:
+            tmp.write_text(json.dumps(have + add, sort_keys=True, separators=(',', ':')))
+            if (dst.stat().st_mtime_ns if dst.exists() else None) != before:   # the game wrote it meanwhile: its own
+                if missed is not None:
+                    missed.append(src.name)
+                continue
+            os.replace(tmp, dst)
+            new += len(add)
+        finally:
+            tmp.unlink(missing_ok=True)   # gone after os.replace; after a failed write, not left in the player's cache
+    return new
+
+
 # ---- the macOS app ----
 def data_bundle(work, logs):
     """The RomFS image (14.3 GB) as a bundle of its own, signed once and kept in the work folder (build/data-bundles):
@@ -1162,7 +1338,7 @@ def app_inputs(work, bundle_stamp, icon):
                 info=app_bundle.info_plist(VERSION, icon=bool(icon)))
 
 
-def step_app_macos(work, out, logs):
+def step_app_macos(work, out, logs, prep=None):
     icon = work / 'build/AppIcon.icns'
     icon = icon if icon.is_file() else None
     with timed('app: data bundle') as t:
@@ -1214,16 +1390,60 @@ def step_app_macos(work, out, logs):
         if f'game version {DISPLAY} ' not in r.stdout:
             raise BuildError(f'the app reports another version than {DISPLAY}: {r.stdout.strip()}')
         say(f'7/7 app: {r.stdout.strip()}')
-    # Metal cache warm-up (the original project compiles its startup shader seed into Metal's cache for the app's own
-    # path): this port has no startup shader seed yet, so there is nothing to compile ahead; the game translates and
-    # caches its shaders as it meets them (~/Library/Application Support/MacNativeGames/XCX/shader-cache).
+    # The prepared shaders (step_shader_prep) go into the player's shader cache, so the game finds them there instead of
+    # translating them as it meets them. The app carries no startup seed: a Mac translates what is still missing while
+    # playing. Not compiled into Metal's cache ahead (the original project did that for its seed): Metal compiles and
+    # caches each one the first time the game uses it.
+    if prep is not None:
+        merge_into_mac_cache(prep, out)
+
+
+def merge_stamp(prep, cache):
+    """What a finished merge of prep into cache is known by: the prepared shaders (their seed-manifest.json, which names
+    every file) and the cache folder itself (deleted and made again, it is another folder). None when prep has no
+    manifest. The game only appends to its indexes, so what was merged once stays merged until either changes."""
+    try:
+        manifest = hashlib.sha256((prep / 'seed-manifest.json').read_bytes()).hexdigest()
+        st = cache.stat()
+    except OSError:
+        return None
+    return dict(format=1, prep=str(prep), manifest=manifest, cache=str(cache), dev=st.st_dev, ino=st.st_ino,
+                birth=getattr(st, 'st_birthtime', None))
+
+
+def merge_into_mac_cache(prep, out):
+    """The prepared shaders into the player's shader cache, unless the game is running: it keeps the indexes in memory
+    and writes them again, which would drop the merged entries (an app that was current had no wait for it to close).
+    A merge that left nothing out is stamped beside the cache (<cache>.prep-merge.json): an unchanged rebuild skips it
+    instead of reading every index again."""
+    if game_running(out):
+        say('shaders: the game is running; prepared shaders go into the Mac cache on the next build')
+        return
+    cache = mac_shader_cache()
+    stamp = cache.with_name(cache.name + '.prep-merge.json')
+    if (want := merge_stamp(prep, cache)) is not None and read_json(stamp) == want:
+        say('shaders: the Mac cache already has the prepared shaders')
+        return
+    try:
+        missed = []
+        new = copy_prepared_shaders(prep, cache, missed)
+        say(f'shaders: {new} new prepared shaders for the Mac cache')
+        with contextlib.suppress(OSError):   # no stamp: the next build merges again, finding nothing new
+            if not missed and (want := merge_stamp(prep, cache)) is not None:
+                stamp.write_text(json.dumps(want, indent=1))
+            else:
+                stamp.unlink(missing_ok=True)
+    except OSError as e:   # the app is built: the game translates what is missing as it meets it
+        say(f'shaders: the prepared shaders could not be copied into the Mac cache ({e}); the game translates them '
+            'as it meets them')
 
 
 # ---- the iPhone / iPad IPA (experimental) ----
 IOS = GAME / 'ios'
-IOS_EXPERIMENTAL = ('EXPERIMENTAL: shaders are not pre-translated, the picture will be mostly missing. An iPhone or iPad '
-                    'cannot translate shaders while playing, and this port has no up-front shader translation yet: the IPA '
-                    'carries only the shader variants this Mac has already translated, and every other draw is skipped.')
+IOS_EXPERIMENTAL = ('EXPERIMENTAL: an iPhone or iPad cannot translate shaders while playing. The IPA carries every shader '
+                    'of the game prepared for its usual case and the cases players have met and shared (the shared shader '
+                    'list), plus what this Mac has translated; a draw that needs a case nobody has shared yet is skipped '
+                    'until someone shares it (docs/sharing-shaders.md).')
 
 
 def req_ios_xcode():
@@ -1323,25 +1543,25 @@ def check_requirements(platform_name):
     return ok
 
 
-def ios_seed_caches(work, extra):
-    """The Mac shader caches whose translated variants the IPA carries (read only): the player's (what the self-contained
-    app translated), the work folder's own (make boot, the development app), the iPhone's earlier misses translated by
-    ios/tools/fill_shaders.py, and any --ios-seed-cache folders."""
-    chain = next(line.split('"')[1] for line in (GAME / 'third_party/d2r_gfx/gfx/nvn/dmsh_chain.h').read_text().splitlines()
-                 if line.startswith('#define DMSH_CHAIN'))
-    folders = [Path.home() / f'Library/Application Support/MacNativeGames/{app_bundle.DATA_FOLDER}/shader-cache/rt-{chain}',
-               work / f'build/shader-cache/rt-{chain}', work / f'build/ios-fill/rt-{chain}']
+def ios_seed_caches(work, extra, prep=None):
+    """The shader caches whose translated variants the IPA carries (read only; a variant in several is taken from the
+    first): this build's prepared shaders (step_shader_prep; None when it failed), the player's (what the
+    self-contained app translated), the work folder's own (make boot, the development app), the iPhone's earlier misses
+    translated by ios/tools/fill_shaders.py, and any --ios-seed-cache folders."""
+    chain = shader_chain()
+    folders = ([prep] if prep is not None else []) + [
+        mac_shader_cache(), work / f'build/shader-cache/rt-{chain}', work / f'build/ios-fill/rt-{chain}']
     for folder in extra:
         folder = folder.expanduser().resolve()
         folders.append(folder / f'rt-{chain}' if (folder / f'rt-{chain}').is_dir() else folder)
     return [f for f in dict.fromkeys(folders) if f.is_dir()]
 
 
-def step_ipa(work, out, logs, args=None):
+def step_ipa(work, out, logs, args=None, prep=None):
     with timed('ipa: device build and package') as t:
         say('7/7 ipa: the device code, Opus and libvpx for iOS, the Xcode project and the IPA '
             '(games/xcx/ios/tools/build_ipa.py; the first time several minutes and network access)')
-        caches = ios_seed_caches(work, (args.ios_seed_cache if args else None) or [])
+        caches = ios_seed_caches(work, (args.ios_seed_cache if args else None) or [], prep)
         seed = [a for c in caches for a in ('--seed-cache', c)]
         run([sys.executable, IOS / 'tools/build_ipa.py', '--work', work, '--out', out, '--logs', logs, '--version', VERSION,
              '--app-name', APP_NAME, '--bundle-id', app_bundle.BUNDLE_ID, *seed], logs / 'build-ipa.log',
@@ -1362,7 +1582,7 @@ PLATFORMS = {
 # The steps in order, for --progress json's plan (the names timed() reports); 'inputs' and 'requirements' are not timed
 STEPS = ['inputs', 'requirements', 'setup: Python environment', 'identify', 'code: ExeFS', 'code: NSO segments',
          'code: rewrite', 'code: rewrite checks', 'fonts', 'data: RomFS', 'prepare', 'runtime', 'shader tools',
-         'launcher and icon']
+         'shaders: prepare', 'launcher and icon']
 PACKAGE_STEPS = dict(macos=['app: data bundle', 'app: assemble and sign', 'app: register and first check'],
                      ios=['ipa: device build and package'])
 
@@ -1386,8 +1606,8 @@ def parse_args(argv):
                                                    f'or .ipa with --platform ios)')
     ap.add_argument('--work', type=Path, help=f'work folder (default: {WORK_NAME} at the repository root, next to build_app.py)')
     ap.add_argument('--platform', choices=('macos', 'ios'), default='macos',
-                    help='macos (default), or ios: an unsigned iPhone / iPad IPA for sideloading (EXPERIMENTAL: most of '
-                         'the picture is missing until shaders are translated ahead of time)')
+                    help='macos (default), or ios: an unsigned iPhone / iPad IPA for sideloading (EXPERIMENTAL: a draw '
+                         'needing a shader case nobody has shared yet is skipped)')
     ap.add_argument('--delete-work', action='store_true',
                     help='delete the work folder once the app (or IPA) is built and its final check passed (only a work '
                          'folder build_app.py made; never on a failure or a cancel). A later build starts from scratch '
@@ -1395,6 +1615,9 @@ def parse_args(argv):
                          'app is deleted too')
     ap.add_argument('--ios-seed-cache', type=Path, action='append',
                     help='iOS: another Mac shader cache folder whose translated variants the IPA carries (read only); repeatable')
+    ap.add_argument('--offline', action='store_true',
+                    help='do not download the newest shared shader list; use the one cached by an earlier build, or the '
+                         'one in the project')
     add_window_options(ap)
     return ap.parse_args(argv)
 
@@ -1632,11 +1855,15 @@ def build_all(args, plat, out, work, logs, t0):
     build.step_prepare()
     build.step_runtime()
     build.step_shader_tools()
+    pulled = pull_ios_contribution() if args.platform == 'ios' else 0
+    prep = step_shader_prep(work, logs, vpy, args.offline)
     build.step_launcher()
     if args.platform == 'ios':
-        step_ipa(work, out, logs, args)
+        step_ipa(work, out, logs, args, prep)
         total = time.time() - t0
         say_times(work, total)
+        # the iPhone's rows when this build brought some (the file may hold the Mac's too: then the player picks)
+        report_contribution(work, 'iPhone' if pulled else None)   # before the work folder (and its list) may go
         if args.delete_work:
             delete_work(work, out, work_inputs(args), 'ios')
         say(f'done in {total / 60:.1f} min: {out} ({DISPLAY})')
@@ -1649,9 +1876,10 @@ def build_all(args, plat, out, work, logs, t0):
             'Files). Needs iOS / iPadOS 26 and an iPhone 14 or newer. The app holds the game code: keep it for your own use, '
             'never share it.')
         return
-    plat['package'](work, out, logs)
+    plat['package'](work, out, logs, prep=prep)
     total = time.time() - t0
     say_times(work, total)
+    report_contribution(work)   # before the work folder (and the list it cached) may go
     if args.delete_work:
         delete_work(work, out, work_inputs(args), 'macos')
     updated = installed and installed[0] != VERSION

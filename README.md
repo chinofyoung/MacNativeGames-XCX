@@ -251,11 +251,12 @@ the switches a terminal run needs.
 ### iPhone and iPad (experimental)
 
 `--platform ios` builds an unsigned IPA for sideloading. **It is experimental.** An
-iPhone or iPad cannot translate the game's shaders while it plays (there is no translator process on iOS), and this port
-does not translate them ahead of time yet. The IPA carries only the shader variants your Mac has already translated
-while you played the Mac app. It runs at a smooth 30 fps on an iPhone 15 Pro Max in the first area, with the full picture
-there, because the IPA carries the shaders your Mac translated while you played that area. Anywhere you have not played
-on the Mac, draws whose shaders were not carried are skipped; nothing past the first area has been tested on iPhone.
+iPhone or iPad cannot translate the game's shaders while it plays (there is no translator process on iOS), so the build
+translates them ahead of time: every shader it finds in your own game files, plus the ones players have shared (see
+[Sharing shaders](#sharing-shaders)), plus what your Mac translated while you played the Mac app. The first iOS build
+after this took about 28 minutes once (it compiles the shaders for the phone; later builds reuse them). It runs at a
+smooth 30 fps on an iPhone 15 Pro Max in the first area, with the full picture there. A shader nobody has met yet is
+still skipped on the phone until it is shared or filled in (below); nothing past the first area has been tested on iPhone.
 The iOS Simulator cannot run it: the graphics layer uses Metal 4, which the Simulator SDK does not have.
 
 Requirements:
@@ -276,8 +277,8 @@ python3 build_app.py "<game folder>/Xenoblade Chronicles X Definitive Edition.xc
 
 This writes `Xenoblade Chronicles X.ipa` next to the game file (`-o` picks another `.ipa` path); add `--update <2.0.0
 update.nsp>` for 2.0.0, as for the Mac. The IPA is about
-40 MB, because it holds the game code, the RomFS index, the system fonts and the carried shaders, but not the 14.3 GB
-game image. `--ios-seed-cache <folder>` adds another Mac shader cache to carry. By default the build carries the
+159 MB (86 MB before the shared list), because it holds the game code, the RomFS index, the system fonts and the
+shaders, but not the 14.3 GB game image. `--ios-seed-cache <folder>` adds another Mac shader cache to carry. By default the build carries the
 cache in `~/Library/Application Support/MacNativeGames/XCX/shader-cache` and the work folder's own caches.
 
 **In the window:** pick *iPhone and iPad (experimental)*. The output becomes an `.ipa`, and the prerequisites add Xcode
@@ -312,7 +313,8 @@ The game data stays in the app's Documents when you reinstall or update the app.
 first start hashes it once against the build's checksum and keeps a record. Saves and the shader cache are also in
 Documents. The log is `log.txt` there, which you can read in the Files app (On My iPhone › Xenoblade Chronicles X).
 
-Shaders the device misses are listed in `shader-list-contribution.txt` and saved as requests in Documents. With the
+Shaders the device misses are listed in `shader-list-contribution.txt` and saved as requests in Documents. Share the
+file (see [Sharing shaders](#sharing-shaders)); to fix the gaps before the list has them, with the
 device connected, `python3 games/xcx/ios/tools/fill_shaders.py --work <work folder> --device <id>` translates them on
 the Mac and sends them to the device, and later IPA builds carry them too. The game merges them on its next start. On
 an iPhone 15 Pro Max it filled in the clothes of the player character. `xcrun devicectl list devices` gives the device
@@ -320,6 +322,14 @@ id. A sideloaded app has the team in its bundle id (the install log prints it, e
 pass it as `--bundle-id` (or `XCX_BUNDLE_ID`). Without Apple's Metal Toolchain the tool sends MSL source only, which the
 device compiles at start; `xcodebuild -downloadComponent MetalToolchain` installs it, and `--with-done` rebuilds the
 packs already sent.
+
+## Sharing shaders
+
+The game notes the shaders it meets that the shared list does not have yet (identifiers only, never game data), and the
+launcher and the builder window offer to send them as a GitHub issue. A robot adds them to the list, and every player's
+next build prepares them, which matters most on iPhone and iPad. Builds download the newest list on their own; `--offline`
+skips that. The guide for players, with file locations, is
+[docs/sharing-shaders.md](https://github.com/chinofyoung/XC-Native/blob/main/docs/sharing-shaders.md).
 
 ## Controls
 
@@ -364,14 +374,13 @@ Extra keys:
 - No online features: the network is offline. The name filter accepts any name.
 - About a hundred NVN functions the game imports are not implemented. One that is called stops the game with its name in
   the log; none was reached up to the first battle.
-- There is no startup shader seed or Metal cache warm-up yet (the original project ships both for Tears of the Kingdom):
-  a new install translates each shader the first time it is drawn.
+- The Mac app has no Metal cache warm-up yet (the original project ships one for Tears of the Kingdom): a shader the
+  build did not prepare is translated the first time it is drawn.
 - The NSP path (a base NSP with an update NSP) has been checked with an update NSP only; the port was played from the
   XCI.
 - The iPhone / iPad build (`--platform ios`) is experimental; it runs at a smooth 30 fps on an iPhone 15 Pro Max in the
-  first area, with the full picture there, because the IPA carries the shaders your Mac translated while you played that area.
-  Anywhere you have not played on the Mac, draws whose shaders were not carried are skipped, and nothing past the first
-  area has been tested on iPhone; see [iPhone and iPad](#iphone-and-ipad-experimental).
+  first area, with the full picture there. A shader neither found in your game files nor on the shared list is skipped,
+  and nothing past the first area has been tested on iPhone; see [iPhone and iPad](#iphone-and-ipad-experimental).
 
 ## How it works
 

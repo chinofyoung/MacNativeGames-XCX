@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Translate the shader variants an iPhone/iPad was missing and send them back to it (Xenoblade Chronicles X).
 
-Restored from the original project's games/totk/ios/tools/fill_shaders.py. The graphics layer is the same, so the request
-and pack formats are too; what this port lacks is the original's shared shader list, so the translations are kept in the
-work folder instead (<work>/build/ios-fill/rt-<chain>), and the next `build_app.py --platform ios` carries them in the
-app's shader seed. EXPERIMENTAL, like the iOS build. First run against a device on 2026-10-24 (iPhone 15 Pro Max): 201
-requests translated and pushed, and after a restart the player character was drawn with their outfit. A sideloaded app's
-bundle id has the team suffix (org.macnativegames.xcx.<team id, lowercase>; the install log prints it), so pass it as
+Restored from the original project's games/totk/ios/tools/fill_shaders.py. The graphics layer is the same, so the
+request and pack formats are too. This is now the stopgap for what the shared shader list has not reached yet (builds
+prepare every shader found in the game files and the list, docs/sharing-shaders.md): the translations are kept in the
+work folder (<work>/build/ios-fill/rt-<chain>), and the next `build_app.py --platform ios` carries them in the app's
+seed. EXPERIMENTAL, like the iOS build. First run against a device on 2026-10-24 (iPhone 15 Pro Max): 201 requests
+translated and pushed, and after a restart the player character was drawn with their outfit. A sideloaded app's bundle
+id has the team suffix (org.macnativegames.xcx.<team id, lowercase>; the install log prints it), so pass it as
 --bundle-id. Without the Metal Toolchain (xcodebuild -downloadComponent MetalToolchain) the pack has MSL only.
 
 iOS has no shader translator. On a miss the game skips the draws that need the variant and saves the complete request
 (variant, stage, guest code) to Documents/shader-requests/ (third_party/d2r_gfx/gfx/nvn/totk_shader_rt.m). This tool
 pulls those requests, translates them with the Mac's runtime service (build/shader-service/totk_xlate) into
-<work>/build/ios-fill, compiles device metallibs, and pushes one pack in the startup-seed format to Documents/shader-fill/. The game
-checks and merges the pack on its next start (totk_fill_import) and warms the new variants in the background.
-usage: fill_shaders.py --work <work folder> --device <id> [--bundle-id <id>] [--requests <dir>] [--with-done] [--no-push]"""
+<work>/build/ios-fill, compiles device metallibs, and pushes one pack in the startup-seed format to
+Documents/shader-fill/. The game checks and merges the pack on its next start (totk_fill_import) and warms the new
+variants in the background.
+usage: fill_shaders.py --work <work folder> --device <id> [--bundle-id <id>] [--requests <dir>] [--with-done]
+                       [--no-push]"""
 import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 from xcode_dir import developer_dir

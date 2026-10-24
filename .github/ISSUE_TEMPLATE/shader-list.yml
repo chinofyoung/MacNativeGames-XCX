@@ -1,0 +1,45 @@
+name: Shader list
+description: Share the shaders your game met that the shared shader list does not have yet.
+title: "Shader list: "
+labels: ["shader-list"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! The file holds shader identifiers only: no game data, saves or personal information. A robot adds the
+        new ones to [the shared list](https://github.com/chinofyoung/XC-Native/blob/main/games/xcx/assets/shader_list.tsv)
+        within a few minutes, and everyone's next build includes them. How to find the file:
+        [sharing shaders](https://github.com/chinofyoung/XC-Native/blob/main/docs/sharing-shaders.md).
+
+        Keep the title starting with "Shader list:". One share per GitHub account per day; the account has to be at least
+        a week old.
+  - type: dropdown
+    id: version
+    attributes:
+      label: Game version
+      options: ["2.0.0", "1.0.1"]
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options: ["Mac", "iPhone", "iPad"]
+    validations:
+      required: true
+  - type: textarea
+    id: file
+    attributes:
+      label: shader-list-contribution.txt
+      description: |
+        Drag the file into this box. Mac: `~/Library/Application Support/MacNativeGames/XCX/shader-list-contribution.txt`
+        (the builder window's Share button opens this page and shows the file in Finder). iPhone / iPad: Files app ›
+        On My iPhone (or iPad) › the game's folder (Xenoblade Chronicles X unless you named the app otherwise).
+      placeholder: Drop shader-list-contribution.txt here
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Where you played (optional)
+      placeholder: e.g. Primordia and Noctilum, 2 hours
